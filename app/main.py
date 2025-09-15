@@ -1,6 +1,6 @@
 import streamlit as st
-from app.mongo_utils import montar_memoria_dinamica, salvar_interacao
-from app.persona import PERSONA_MARY, gerar_resposta_mary
+from mongo_utils import montar_memoria_dinamica, salvar_interacao
+from persona import PERSONA_MARY, gerar_resposta_mary
 
 st.set_page_config(page_title="Roleplay com Mary Massariol", layout="centered")
 
