@@ -1,13 +1,16 @@
+import streamlit as st
 from pymongo import MongoClient
 from urllib.parse import quote_plus
 from datetime import datetime
-import tiktoken  # Certifique-se que este pacote está instalado!
+import tiktoken
 
-# ======= CONFIGURAÇÃO DO MONGODB ATLAS ======
-raw_password = "SUA_SENHA_MONGO"  # Altere para sua senha real ou use variável de ambiente!
-password = quote_plus(raw_password)
-MONGO_URI = f"mongodb+srv://welnecker:{password}@agnoroleplay.nkoa0jf.mongodb.net/?retryWrites=true&w=majority&appName=AgnoRoleplay"
-
+mongo_user = st.secrets["MONGO_USER"]
+mongo_pass = quote_plus(st.secrets["MONGO_PASS"])
+mongo_cluster = st.secrets["MONGO_CLUSTER"]
+MONGO_URI = (
+    f"mongodb+srv://{mongo_user}:{mongo_pass}@{mongo_cluster}/?retryWrites=true&w=majority"
+    "&appName=AgnoRoleplay"
+)
 client = MongoClient(MONGO_URI)
 db = client["AgnoRoleplay"]
 colecao = db["mary_historia"]
