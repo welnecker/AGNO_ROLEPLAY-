@@ -1,17 +1,13 @@
+import streamlit as st
 from transformers import pipeline
 from huggingface_hub import login
-import os
 
-# ======= CONFIGURAÇÃO DO HUGGING FACE ======
-# Pegue o token de variável de ambiente ou cole diretamente (NÃO versionar tokens reais!)
-HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN", "hf_seu_token_aqui")
+HF_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
 login(HF_TOKEN)
-
-# Se quiser, troque por um modelo mais elaborado ou português!
 generator = pipeline(
     "text-generation",
-    model="deepseek-ai/DeepSeek-R1",   # Pode ser ajustado!
-    max_length=2048,                   # Tamanho máximo de resposta gerada!
+    model="deepseek-ai/DeepSeek-R1",
+    max_length=2048,
     temperature=0.8
 )
 
