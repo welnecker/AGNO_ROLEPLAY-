@@ -72,3 +72,17 @@ def gerar_resposta_openrouter(prompt_usuario, history=None):
     response.raise_for_status()
     resposta = response.json()["choices"][0]["message"]["content"]
     return resposta
+
+# ... código de conexão Mongo já existente ...
+
+def limpar_memoria_usuario(usuario):
+    colecao.delete_many({"usuario": usuario})
+
+def apagar_ultima_interacao_usuario(usuario):
+    docs = list(colecao.find({"usuario": usuario}).sort([('_id', -1)]).limit(2))
+    # Última interação normalmente é par: turno usuário + resposta Mary
+    if docs:
+        for doc in docs:
+            colecao.delete_one({'_id': doc['_id']})
+
+
