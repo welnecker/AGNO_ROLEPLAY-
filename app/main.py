@@ -1,5 +1,12 @@
 import streamlit as st
-from mongo_utils import montar_historico_openrouter, salvar_interacao, gerar_resposta_openrouter
+from mongo_utils import (
+    montar_historico_openrouter,
+    salvar_interacao,
+    gerar_resposta_openrouter,
+    limpar_memoria_usuario,
+    apagar_ultima_interacao_usuario
+)
+
 
 st.set_page_config(page_title="Roleplay com Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
