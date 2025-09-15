@@ -94,14 +94,23 @@ Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros)
 
 
 # ======= GERAÇÃO DE RESPOSTA DA MARY ======
-def gerar_resposta_mary(msg_usuario, memoria):
-    # Monta o prompt para o modelo:
-    prompt = (
-        PERSONA_MARY.strip() + "\n"
-        + memoria
-        + f"Usuário: {msg_usuario}\nMary:"
-    )
-    saida = generator(prompt, max_length=2048, do_sample=True)[0]["generated_text"]
-    # Filtra para pegar apenas o necessário após "Mary:"
-    resposta = saida.split("Mary:")[-1].strip().split("Usuário:")[0].strip()
-    return resposta[:1000]
+def gerar_resposta_openrouter(prompt_usuario, history=None):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {...}
+    system_prompt = {
+        "role": "system",
+        "content": PERSONA_MARY.strip()  # manda todas as regras!
+    }
+    messages = [system_prompt]
+    if history:
+        messages += history
+    messages.append({"role": "user", "content": prompt_usuario})
+    payload = {
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "messages": messages,
+        "max_tokens": 2048
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    resposta = response.json()["choices"][0]["message"]["content"]
+    return resposta
