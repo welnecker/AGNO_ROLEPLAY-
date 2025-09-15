@@ -3,6 +3,7 @@ from pymongo import MongoClient
 from urllib.parse import quote_plus
 from datetime import datetime
 import tiktoken
+import requests
 
 mongo_user = st.secrets["MONGO_USER"]
 mongo_pass = quote_plus(st.secrets["MONGO_PASS"])
@@ -15,11 +16,10 @@ client = MongoClient(MONGO_URI)
 db = client["AgnoRoleplay"]
 colecao = db["mary_historia"]
 
-# ======= TOKENIZAÇÃO PARA LIMITE DE MEMÓRIA ======
-# Utilize o tokenizer compatível com seu modelo LLM.
-tokenizer = tiktoken.get_encoding("cl100k_base")  # Funciona com contexto estilo OpenAI/DeepSeek (~cl100k_base)
+# Tokenizador para limite de contexto (cl100k_base - OpenAI compatível)
+tokenizer = tiktoken.get_encoding("cl100k_base")
 
-# ======= FUNÇÃO: SALVAR INTERAÇÃO NO BANCO ======
+# SALVAR INTERAÇÃO NO BANCO
 def salvar_interacao(usuario, mensagem_usuario, resposta_mary):
     doc = {
         "usuario": usuario,
@@ -29,22 +29,46 @@ def salvar_interacao(usuario, mensagem_usuario, resposta_mary):
     }
     colecao.insert_one(doc)
 
-# ======= FUNÇÃO: MONTAR HISTÓRICO DENTRO DO LIMITE DE TOKENS ======
-def montar_memoria_dinamica(usuario, limite_tokens=120000, persona_preset=""):
-    docs = list(colecao.find({"usuario": usuario}).sort([('_id', 1)]))  # ordem mais antiga -> mais recente
-    historia = ""
-    total_tokens = len(tokenizer.encode(persona_preset)) if persona_preset else 0
-    blocos = []
-
-    # Empilha o máximo possível de histórico (do mais antigo ao mais recente)
+# MONTAR HISTÓRICO PARA OPENROUTER CHAT
+def montar_historico_openrouter(usuario, limite_tokens=120000):
+    docs = list(colecao.find({"usuario": usuario}).sort([('_id', 1)]))
+    messages = []
+    total_tokens = 0
+    # Mantém o máximo possível do histórico segundo limite de tokens
     for doc in reversed(docs):  # começa dos mais recentes!
-        bloco = f"Usuário: {doc['mensagem_usuario']}\nMary: {doc['resposta_mary']}\n"
-        bloco_tokens = len(tokenizer.encode(bloco))
+        bloco_user = {"role": "user", "content": doc['mensagem_usuario']}
+        bloco_assistant = {"role": "assistant", "content": doc['resposta_mary']}
+        bloco_tokens = len(tokenizer.encode(doc['mensagem_usuario'])) + len(tokenizer.encode(doc['resposta_mary']))
         if total_tokens + bloco_tokens > limite_tokens:
             break
-        blocos.append(bloco)
+        messages.append(bloco_user)
+        messages.append(bloco_assistant)
         total_tokens += bloco_tokens
+    # Retorna cronologicamente correto
+    return list(reversed(messages))
 
-    historia = "".join(reversed(blocos))  # retorna do mais antigo ao mais recente
-    return historia
-
+# FUNÇÃO DE REQUISIÇÃO AO OPENROUTER
+def gerar_resposta_openrouter(prompt_usuario, history=None):
+    OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    system_prompt = {
+        "role": "system",
+        "content": "Roleplay persona: Mary Massariol. Siga o preset estrito, regras de conduta e estilo. Mantenha personagem sempre."
+    }
+    messages = [system_prompt]
+    if history:
+        messages += history
+    messages.append({"role": "user", "content": prompt_usuario})
+    payload = {
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "messages": messages,
+        "max_tokens": 2048
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    resposta = response.json()["choices"][0]["message"]["content"]
+    return resposta
