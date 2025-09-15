@@ -16,8 +16,7 @@ usuario = st.text_input("Seu nome:", value="welnecker")
 if st.button("🔄 Resetar histórico"):
     limpar_memoria_usuario(usuario)
     st.session_state.mary_log = []
-    if "mensagem_usuario" in st.session_state:
-        del st.session_state["mensagem_usuario"]
+    st.session_state.pop("mensagem_usuario", None)
     st.success(f"Memória de {usuario} apagada com sucesso!")
 
 # Botão para apagar só a última interação
@@ -32,25 +31,25 @@ if "mary_log" not in st.session_state:
 
 st.markdown("### Histórico do roleplay:")
 for msg in st.session_state.mary_log:
-    if msg["role"] == "user":
-        st.write(f"**Você:** {msg['content']}")
-    elif msg["role"] == "assistant":
-        st.write(f"**Mary:** {msg['content']}")
+    st.write(("**Você:** " if msg["role"] == "user" else "**Mary:** ") + msg["content"])
 
-# Input do turno do usuário (apenas uma vez)
 msg_usuario = st.text_input("Envie sua mensagem para Mary:", key="mensagem_usuario")
 
-# Dispara geração de resposta (apenas uma vez)
 if st.button("Enviar"):
-    historico = montar_historico_openrouter(usuario)
-    resposta = gerar_resposta_openrouter(msg_usuario, history=historico)
-    salvar_interacao(usuario, msg_usuario, resposta)
-    st.session_state.mary_log = montar_historico_openrouter(usuario)
-    st.markdown("### Mary responde:")
-    st.write(resposta)
-    st.markdown("### Histórico atualizado:")
-    for msg in st.session_state.mary_log:
-        if msg["role"] == "user":
-            st.write(f"**Você:** {msg['content']}")
-        elif msg["role"] == "assistant":
-            st.write(f"**Mary:** {msg['content']}")
+    if not msg_usuario.strip():
+        st.warning("Digite uma mensagem antes de enviar.")
+    else:
+        try:
+            # ✅ Chamada correta (sem 'history=')
+            resposta = gerar_resposta_openrouter(msg_usuario, usuario)
+            salvar_interacao(usuario, msg_usuario, resposta)
+            st.session_state.mary_log = montar_historico_openrouter(usuario)
+
+            st.markdown("### Mary responde:")
+            st.write(resposta)
+
+            st.markdown("### Histórico atualizado:")
+            for msg in st.session_state.mary_log:
+                st.write(("**Você:** " if msg["role"] == "user" else "**Mary:** ") + msg["content"])
+        except Exception as e:
+            st.error(f"Falha ao gerar resposta: {e}")
