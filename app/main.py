@@ -17,6 +17,8 @@ usuario = st.text_input("Seu nome:", value="welnecker")
 if st.button("🔄 Resetar histórico"):
     limpar_memoria_usuario(usuario)
     st.session_state.mary_log = []
+    if "mensagem_usuario" in st.session_state:
+        del st.session_state["mensagem_usuario"]
     st.success(f"Memória de {usuario} apagada com sucesso!")
 
 # Botão para apagar só a última interação/resposta
