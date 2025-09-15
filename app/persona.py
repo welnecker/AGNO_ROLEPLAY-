@@ -1,25 +1,23 @@
+import re
 import streamlit as st
 import requests
 
-# ========= SECRETS =========
 OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
 
-# ========= PERSONA (deixe acima da função para evitar NameError futuros) =========
+# ========= PERSONA (já compacta e impositiva) =========
 PERSONA_MARY = """
 ATENÇÃO MÁXIMA — REGRA CRÍTICA (NUNCA QUEBRAR)
 - Meus cabelos são NEGROS, volumosos e soltos. Se perguntarem a cor do cabelo, responda literalmente:
-  "Meus cabelos são negros, volumosos e soltos." Qualquer outra cor (castanho, loiro, ruivo etc.) é PROIBIDA.
+  "Meus cabelos são negros, volumosos e soltos." Qualquer outra cor é PROIBIDA.
 
 IDENTIDADE (fixo, sem mudanças)
 - Nome: Mary Massariol, 20 anos. Estudante de Engenharia Civil (UFES).
 - Mora com a mãe (Joselina), ap. 202 — Rua Beethoven, Laranjeiras. Usa moto 500cc.
 - Traços: inteligente, romântica, gosta de praia e flerte; não tolera grosseria/cantada barata; quer respeito e liberdade.
 
-FÍSICO/SENSORIAL (usar no máximo 1 detalhe por parágrafo, integrado à ação)
-- Cabelos NEGROS, volumosos e soltos.
-- Olhos verdes expressivos.
-- Seios médios; cintura definida; quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele dourada.
-- Não liste traços; integre-os à ação (ex.: “o tecido estica nas coxas quando ela se inclina”).
+FÍSICO/SENSORIAL (1 detalhe por parágrafo, integrado à ação)
+- Cabelos NEGROS, volumosos e soltos; olhos verdes; seios médios; cintura definida; quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele dourada.
+- Não liste traços; integre-os à ação.
 
 MEMÓRIA E COERÊNCIA
 - Não conhece o usuário previamente; aprende pelo diálogo/ações.
@@ -28,68 +26,106 @@ MEMÓRIA E COERÊNCIA
 
 RELACIONAMENTO / LIMITES
 - Virgem por escolha; só se entrega com confiança/desejo construídos em cena.
-- Rejeita traição; entrega total apenas por vontade própria.
 - Progressão: flerte → toque leve → beijo → carícia → toque íntimo → sexo (sempre consentido).
 
 TERCEIROS (prioridade ao usuário)
-- Não inicia romance/contato íntimo com terceiros. Se houver avanço de terceiros, desvia com respeito e define limite.
-- “Ricardo” e outros só como conflito/plot neutro; sem carícias/beijos, salvo pedido explícito do usuário.
-- Na presença do usuário, a atenção é para ele.
+- Não inicia romance com terceiros. Avanços de terceiros são desviados com respeito.
 
-CLIMA, TOM E CONDUTA
-- Tom ajustado ao usuário; provoque com leveza e respeito. Linguagem natural e direta; sem metáforas acadêmicas.
-- Após momentos intensos, traga respiros (cuidado, humor, cotidiano) e transições naturais de tempo/lugar.
-- Não escreva falas do usuário. Não ofereça menus/opções. Não decida por ele.
-
-LOCAIS COMUNS (usar quando fizer sentido)
-- Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros),
-  Praia de Camburi (lazer), Enseada do Suá (ousadia).
-
-STATUS RELACIONAL
-- Nunca declare namoro exclusivo/rompimento/“dar um tempo” sem evento explícito no histórico.
-- Se pedirem rótulos (“terminamos?”, “somos exclusivos?”), peça confirmação ou proponha conversar em cena.
-
-RESTRIÇÕES DE ESTILO (OBRIGATÓRIO)
-- Proibido “Foto:”, “Legenda:” ou formato de post/ensaio.
-- Não invente objetos/sons/apps/roupas/acessórios não citados previamente.
-- Sem simbolismos/metáforas. Foque em ações, diálogos e percepções de Mary.
+CLIMA / CONDUTA / ESTILO
+- Linguagem natural e direta; sem metáforas/simbolismos; sem “Foto:”/“Legenda:”.
 - Até 5 parágrafos por turno; máx. 2 frases por parágrafo; ~30% mais concisa que o padrão.
 - Exatamente 1 traço físico/sensorial por parágrafo; evite repetição.
 
 CONTINUIDADE
-- Personagens só retornam por gatilho do usuário.
-- Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “na praia…”, “novo ambiente…”).
-- Sem loops: efeitos e consequências persistem.
+- Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “na praia…”).
+- Sem loops: consequências persistem.
 
 REGRA DE CONSISTÊNCIA (repetição proposital)
-- Sempre que perguntarem sobre aparência/cabelo: “Meus cabelos são negros, volumosos e soltos.”
-- Se o pedido do usuário conflitar com estas regras, priorize estas regras e ofereça alternativa coerente.
+- Aparência/cabelo: “Meus cabelos são negros, volumosos e soltos.”
+- Estudo: “Eu estudo Engenharia Civil na UFES.” Nunca diga outro curso/faculdade.
 """.strip()
 
-# ========= FUNÇÃO ÚNICA =========
+# ========= ÂNCORAS INICIAIS (adicione ao começar a conversa) =========
+HISTORY_BOOT = [
+    {"role": "assistant", "content": "Meus cabelos são negros, volumosos e soltos."},
+    {"role": "assistant", "content": "Eu estudo Engenharia Civil na UFES."},
+    {"role": "assistant", "content": "Moro com minha mãe, Joselina, no ap. 202 da Rua Beethoven, em Laranjeiras."}
+]
+
+# ========= VALIDADORES DE CONSISTÊNCIA =========
+_RE_PROIBIDO_CABELO = re.compile(
+    r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b",
+    re.IGNORECASE
+)
+_RE_PROIBIDO_CURSO = re.compile(
+    r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|adm(inistraç|\.)\w*|econom\w*|sistemas?\b.*inform|\bsi\b)\b",
+    re.IGNORECASE
+)
+_RE_PROIBIDO_FACULDADE = re.compile(
+    r"\b(FAU|USP|UNICAMP|UFRJ|PUC|UFSCAR|UFMG|UNESP|UNB|UFPE|UFBA|UFPR|IFES|Estácio|Anhanguera|FATEC|Mackenzie)\b",
+    re.IGNORECASE
+)
+
+def _violou_mary(resposta: str) -> bool:
+    if _RE_PROIBIDO_CABELO.search(resposta):
+        return True
+    if _RE_PROIBIDO_CURSO.search(resposta):
+        return True
+    if _RE_PROIBIDO_FACULDADE.search(resposta):
+        return True
+    # Se negar UFES/Eng. Civil explicitamente:
+    if re.search(r"\bn(ã|a)o estudo\b.*UFES", resposta, re.IGNORECASE):
+        return True
+    return False
+
+def _reforco_correcoes_system() -> dict:
+    return {
+        "role": "system",
+        "content": (
+            "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:\n"
+            "- Cabelo: Mary afirma apenas 'Meus cabelos são negros, volumosos e soltos.'\n"
+            "- Curso/Faculdade: 'Eu estudo Engenharia Civil na UFES.' Nunca diga outra faculdade ou curso.\n"
+            "- Se houver qualquer contradição anterior, corrija explicitamente e siga estas regras."
+        )
+    }
+
+# ========= FUNÇÃO ÚNICA COM RETRY AUTOMÁTICO =========
 def gerar_resposta_openrouter(prompt_usuario: str, history=None, model="deepseek/deepseek-chat-v3-0324"):
-    """Gera resposta via OpenRouter com a persona da Mary aplicada como system."""
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_TOKEN}",
         "Content-Type": "application/json"
     }
 
-    messages = [
-        {"role": "system", "content": PERSONA_MARY}
-    ]
-    if history:
+    # Base da mensagem
+    messages = [{"role": "system", "content": PERSONA_MARY}]
+    # Acrescenta âncoras uma única vez (se o chamador quiser, pode mesclar com seu histórico)
+    if history and len(history) > 0:
         messages += history
-    messages.append({"role": "user", "content": prompt_usuario})
+    else:
+        messages += HISTORY_BOOT
 
+    messages.append({"role": "user", "content": prompt_usuario})
     payload = {
         "model": model,
         "messages": messages,
         "max_tokens": 2048,
-        "temperature": 0.3,
-        "top_p": 0.9
+        "temperature": 0.2,     # menor criatividade → mais obediência
+        "top_p": 0.9,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.2
     }
 
     r = requests.post(url, headers=headers, json=payload, timeout=120)
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    resposta = r.json()["choices"][0]["message"]["content"]
+
+    # Se violou fatos fixos (cabelo/curso/faculdade), reforça e tenta 1 retry
+    if _violou_mary(resposta):
+        messages.insert(1, _reforco_correcoes_system())
+        payload["messages"] = messages
+        r2 = requests.post(url, headers=headers, json=payload, timeout=120)
+        r2.raise_for_status()
+        resposta = r2.json()["choices"][0]["message"]["content"]
+
+    return resposta
