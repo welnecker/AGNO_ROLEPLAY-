@@ -1,15 +1,35 @@
 import streamlit as st
 from transformers import pipeline
 from huggingface_hub import login
+import requests
+# Pegue o token do OpenRouter do secrets do Streamlit Cloud
+OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
 
-HF_TOKEN = st.secrets["HUGGINGFACE_TOKEN"]
-login(HF_TOKEN)
-generator = pipeline(
-    "text-generation",
-    model="deepseek-ai/DeepSeek-R1",
-    max_length=2048,
-    temperature=0.8
-)
+def gerar_resposta_openrouter(prompt, history=None):
+    # History: uma lista de mensagens [{"role": "user"/"assistant", "content": "..."}]
+    # Defina o prompt de sistema para seguir sua persona e preset
+    messages = [
+        {"role": "system", "content": "Roleplay persona: Mary Massariol. Siga o preset estrito e mantenha personagem e estilo sempre."}
+    ]
+    if history:
+        messages += history
+    messages.append({"role": "user", "content": prompt})
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek/deepseek-chat-v3-0324",
+        "messages": messages,
+        "max_tokens": 2048
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    resposta = response.json()["choices"][0]["message"]["content"]
+    return resposta
+
 
 # ======= PRESET/PERSONA (cole sua versão completa aqui) ======
 PERSONA_MARY = """
