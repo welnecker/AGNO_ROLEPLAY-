@@ -103,6 +103,14 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "timestamp": datetime.now().isoformat()
     })
 
+def remover_elenco_usuario(usuario: str):
+    """Apaga do histórico todos os pares com marcador __ELENCO__ (case-insensitive no usuário)."""
+    colecao.delete_many({
+        "usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"},
+        "mensagem_usuario": "__ELENCO__"
+    })
+
+
 def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
     # Busca por nome do usuário sem diferenciar maiúsculas/minúsculas
     docs = list(
