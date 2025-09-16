@@ -10,7 +10,8 @@ from mongo_utils import (
     limpar_memoria_canonica,
     apagar_tudo_usuario,
     registrar_evento, set_fato, ultimo_evento,
-    get_fatos, get_resumo, eventos, perfil, colecao, db
+    get_fatos, get_resumo,
+    colecao, db, state, eventos, perfil
 )
 
 
