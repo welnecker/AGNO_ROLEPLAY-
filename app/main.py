@@ -10,8 +10,9 @@ from mongo_utils import (
     limpar_memoria_usuario,
     limpar_memoria_canonica,
     apagar_tudo_usuario,
-    registrar_evento,         # já usado para eventos
-    get_fatos, get_resumo,    # para listar no sidebar
+    registrar_evento,              # ainda disponível, mas não usado no botão
+    registrar_evento_canonico,     # <- novo: wrapper que sincroniza fatos
+    get_fatos, get_resumo,
     colecao, db, state, eventos, perfil
 )
 
@@ -94,8 +95,15 @@ st.session_state.setdefault("mem_local", "")
 st.session_state.mem_tipo = st.sidebar.radio("Tipo de memória", ["Fato", "Evento"], horizontal=True)
 
 if st.session_state.mem_tipo == "Fato":
-    st.session_state.mem_chave = st.sidebar.text_input("Chave do fato (ex.: primeiro_encontro, cidade_atual)", value=st.session_state.mem_chave)
-    st.session_state.mem_valor = st.sidebar.text_area("Valor do fato (ex.: Academia)", value=st.session_state.mem_valor, height=80)
+    st.session_state.mem_chave = st.sidebar.text_input(
+        "Chave do fato (ex.: primeiro_encontro, cidade_atual)",
+        value=st.session_state.mem_chave
+    )
+    st.session_state.mem_valor = st.sidebar.text_area(
+        "Valor do fato (ex.: Academia)",
+        value=st.session_state.mem_valor,
+        height=80
+    )
     colf1, colf2 = st.sidebar.columns(2)
     with colf1:
         if st.button("💾 Salvar fato"):
@@ -122,28 +130,41 @@ if st.session_state.mem_tipo == "Fato":
             st.session_state.mem_valor = ""
             st.sidebar.info("Edição descartada.")
 else:
-    st.session_state.mem_chave = st.sidebar.text_input("Tipo do evento (ex.: primeira_vez, encontro, briga)", value=st.session_state.mem_chave)
-    st.session_state.mem_valor = st.sidebar.text_area("Descrição do evento (factual, curta)", value=st.session_state.mem_valor, height=80)
-    st.session_state.mem_local = st.sidebar.text_input("Local (opcional)", value=st.session_state.mem_local, placeholder="Ex.: Academia, Praia de Camburi")
+    st.session_state.mem_chave = st.sidebar.text_input(
+        "Tipo do evento (ex.: primeiro_encontro, primeira_vez, episodio_ciume_praia)",
+        value=st.session_state.mem_chave
+    )
+    st.session_state.mem_valor = st.sidebar.text_area(
+        "Descrição do evento (factual, curta)",
+        value=st.session_state.mem_valor,
+        height=80
+    )
+    st.session_state.mem_local = st.sidebar.text_input(
+        "Local (opcional)",
+        value=st.session_state.mem_local,
+        placeholder="Ex.: Academia, Praia de Camburi"
+    )
     cole1, cole2 = st.sidebar.columns(2)
     with cole1:
         if st.button("💾 Salvar evento"):
             if st.session_state.mem_chave.strip() and st.session_state.mem_valor.strip():
-                registrar_evento(
+                # >>> usa o wrapper que também atualiza fatos canônicos
+                registrar_evento_canonico(
                     usuario=st.session_state.get("usuario_fixado", "desconhecido"),
                     tipo=st.session_state.mem_chave.strip(),
                     descricao=st.session_state.mem_valor.strip(),
                     local=(st.session_state.mem_local.strip() or None),
-                    data_hora=datetime.utcnow()
+                    data_hora=datetime.utcnow(),
+                    atualizar_fatos=True,
                 )
-                st.sidebar.success("Evento salvo!")
+                st.sidebar.success("Evento salvo (e fatos sincronizados)!")
                 st.session_state.mem_chave = ""
                 st.session_state.mem_valor = ""
                 st.session_state.mem_local = ""
             else:
                 st.sidebar.warning("Preencha tipo e descrição do evento.")
     with cole2:
-        if st.button("🗑️ Descartar evento"):
+        if st.sidebar.button("🗑️ Descartar evento"):
             st.session_state.mem_chave = ""
             st.session_state.mem_valor = ""
             st.session_state.mem_local = ""
