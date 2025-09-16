@@ -4,8 +4,10 @@ from mongo_utils import (
     montar_historico_openrouter,
     salvar_interacao,
     gerar_resposta_openrouter,
-    limpar_memoria_usuario,
-    apagar_ultima_interacao_usuario
+    limpar_memoria_usuario,       # só chat
+    limpar_memoria_canonica,      # só canônicas
+    apagar_tudo_usuario,          # chat + canônicas
+    registrar_evento, set_fato, ultimo_evento  # (se você já usa os botões de memória)
 )
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
@@ -39,20 +41,30 @@ st.session_state.enredo_inicial = st.text_area(
 )
 
 # ===== Controles de memória =====
-b1, b2 = st.columns(2)
-with b1:
-    if st.button("🔄 Resetar histórico"):
+c1, c2, c3 = st.columns(3)
+with c1:
+    if st.button("🔄 Resetar histórico (chat)"):
         limpar_memoria_usuario(USUARIO)
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.session_state.elenco_publicado = False
-        st.success(f"Memória de {USUARIO} apagada.")
-with b2:
+        st.success(f"Histórico de {USUARIO} apagado (memórias canônicas preservadas).")
+
+with c2:
+    if st.button("🧠 Apagar TUDO (chat + memórias)"):
+        apagar_tudo_usuario(USUARIO)
+        st.session_state.mary_log = []
+        st.session_state.enredo_publicado = False
+        st.session_state.elenco_publicado = False
+        st.success(f"Chat e memórias canônicas de {USUARIO} foram apagados.")
+
+with c3:
     if st.button("⏪ Apagar último turno"):
+        # remove as duas últimas entradas (user+assistant), se existirem
+        from mongo_utils import apagar_ultima_interacao_usuario
         apagar_ultima_interacao_usuario(USUARIO)
         st.session_state.mary_log = montar_historico_openrouter(USUARIO)
         st.info("Última interação apagada.")
-
 # ===== Carrega histórico =====
 st.session_state.mary_log = montar_historico_openrouter(USUARIO)
 
