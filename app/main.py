@@ -5,9 +5,9 @@ from mongo_utils import (
     salvar_interacao,
     gerar_resposta_openrouter,
     limpar_memoria_usuario,       # só chat
-    limpar_memoria_canonica,      # só canônicas
-    apagar_tudo_usuario,          # chat + canônicas
-    registrar_evento, set_fato, ultimo_evento  # (se você já usa os botões de memória)
+    limpar_memoria_canonica,      # só memórias canônicas
+    apagar_tudo_usuario,          # chat + memórias
+    registrar_evento, set_fato, ultimo_evento  # (se usar botões de memória canônica)
 )
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
@@ -17,11 +17,9 @@ st.title("Roleplay | Mary Massariol")
 st.sidebar.title("Mary Massariol")
 st.sidebar.caption("Roleplay imersivo")
 
-# guarda preferências na sessão
 st.session_state.setdefault("sidebar_img_url", "")
 st.session_state.setdefault("sidebar_credito", "")
 
-# opção 1: URL remota
 st.sidebar.subheader("Imagem (URL)")
 st.session_state.sidebar_img_url = st.sidebar.text_input(
     "Cole uma URL de imagem",
@@ -29,11 +27,9 @@ st.session_state.sidebar_img_url = st.sidebar.text_input(
     placeholder="https://exemplo.com/mary.png"
 )
 
-# opção 2: upload local
 st.sidebar.subheader("Ou envie um arquivo")
 upload_file = st.sidebar.file_uploader("PNG/JPG", type=["png", "jpg", "jpeg"])
 
-# tenta exibir — prioridade: upload > URL
 img_shown = False
 if upload_file is not None:
     st.sidebar.image(upload_file, use_container_width=True)
@@ -45,7 +41,6 @@ elif st.session_state.sidebar_img_url.strip():
     except Exception:
         st.sidebar.warning("Não foi possível carregar a imagem da URL.")
 
-# crédito/legenda opcional
 st.session_state.sidebar_credito = st.sidebar.text_input(
     "Crédito/legenda (opcional)",
     value=st.session_state.sidebar_credito,
@@ -53,7 +48,6 @@ st.session_state.sidebar_credito = st.sidebar.text_input(
 )
 if img_shown and st.session_state.sidebar_credito.strip():
     st.sidebar.caption(st.session_state.sidebar_credito.strip())
-
 
 # ===== Campos fixos =====
 st.session_state.setdefault("usuario_input", "welnecker")
@@ -102,31 +96,60 @@ with c2:
 
 with c3:
     if st.button("⏪ Apagar último turno"):
-        # remove as duas últimas entradas (user+assistant), se existirem
         from mongo_utils import apagar_ultima_interacao_usuario
         apagar_ultima_interacao_usuario(USUARIO)
         st.session_state.mary_log = montar_historico_openrouter(USUARIO)
         st.info("Última interação apagada.")
+
 # ===== Carrega histórico =====
 st.session_state.mary_log = montar_historico_openrouter(USUARIO)
 
-# Publica enredo inicial uma única vez no começo
-if st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado and not st.session_state.mary_log:
-    salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
-    st.session_state.mary_log = montar_historico_openrouter(USUARIO)
-    st.session_state.enredo_publicado = True
+# ===== Publicação inicial (Enredo + Elenco em um passo) =====
+if not st.session_state.mary_log:
+    inseriu_algo = False
+    if st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado:
+        salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
+        st.session_state.enredo_publicado = True
+        inseriu_algo = True
+    if not st.session_state.elenco_publicado:
+        elenco_txt = (
+            "**Elenco de apoio**\n\n"
+            "- **Silvia Bodat** — extrovertida, bem-humorada; puxa conversa e descontrai.\n"
+            "- **Alexandra Resinentti** — reservada, conselheira; fala pouco e vai direto ao ponto.\n\n"
+            "_Aparecem como apoio (fofocas, conselhos, contexto), sem tirar o foco do usuário._"
+        )
+        salvar_interacao(USUARIO, "__ELENCO__", elenco_txt)
+        st.session_state.elenco_publicado = True
+        inseriu_algo = True
+    if inseriu_algo:
+        st.session_state.mary_log = montar_historico_openrouter(USUARIO)
 
-# Publica “Elenco” uma única vez no começo (Silvia/Alexandra)
-if not st.session_state.elenco_publicado and not st.session_state.mary_log:
-    elenco_txt = (
-        "**Elenco de apoio**\n\n"
-        "- **Silvia Bodat** — extrovertida, bem-humorada; puxa conversa e descontrai.\n"
-        "- **Alexandra Resinentti** — reservada, conselheira; fala pouco e vai direto ao ponto.\n\n"
-        "_Aparecem como apoio (fofocas, conselhos, contexto), sem tirar o foco do usuário._"
-    )
-    salvar_interacao(USUARIO, "__ELENCO__", elenco_txt)
-    st.session_state.mary_log = montar_historico_openrouter(USUARIO)
-    st.session_state.elenco_publicado = True
+# ===== Diagnóstico (opcional, útil) =====
+with st.expander("🔍 Diagnóstico do banco"):
+    try:
+        from pymongo import DESCENDING
+        from mongo_utils import db, colecao, state, eventos, perfil
+        st.write(f"**DB**: `{db.name}`")
+        st.write(f"**Coleções**: {[c for c in db.list_collection_names()]}")
+        total_hist = colecao.count_documents({"usuario": USUARIO})
+        total_state = state.count_documents({"usuario": USUARIO})
+        total_eventos = eventos.count_documents({"usuario": USUARIO})
+        total_perfil = perfil.count_documents({"usuario": USUARIO})
+        st.write(f"Histórico (`mary_historia`): **{total_hist}**")
+        st.write(f"Memória canônica — state: **{total_state}**, eventos: **{total_eventos}**, perfil: **{total_perfil}**")
+        if total_hist:
+            ult = list(colecao.find({"usuario": USUARIO}).sort([("_id", DESCENDING)]).limit(5))
+            st.write("Últimos 5 (histórico):")
+            for d in ult:
+                st.code({
+                    "ts": d.get("timestamp"),
+                    "user": (d.get("mensagem_usuario") or "")[:120],
+                    "mary": (d.get("resposta_mary") or "")[:120],
+                })
+        else:
+            st.info("Nenhuma interação no histórico para este usuário.")
+    except Exception as e:
+        st.error(f"Falha no diagnóstico: {e}")
 
 # ===== Chat =====
 chat = st.container()
