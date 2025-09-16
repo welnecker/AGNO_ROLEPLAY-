@@ -103,10 +103,15 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "timestamp": datetime.now().isoformat()
     })
 
-def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> List[Dict[str, str]]:
-    docs = list(colecao.find({"usuario": usuario}).sort([("_id", 1)]))
-    messages_rev: List[Dict[str, str]] = []
-    total_tokens = 0
+def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
+    # Busca por nome do usuário sem diferenciar maiúsculas/minúsculas
+    docs = list(
+        colecao.find(
+            {"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}
+        ).sort([("_id", 1)])
+    )
+
+    messages_rev, total_tokens = [], 0
     for doc in reversed(docs):
         u = (doc.get("mensagem_usuario") or "")
         a = (doc.get("resposta_mary") or "")
@@ -116,7 +121,12 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> Li
         messages_rev.append({"role": "assistant", "content": a})
         messages_rev.append({"role": "user", "content": u})
         total_tokens += tok
+
+    # Só injete HISTORY_BOOT se realmente não há nada salvo
+    if not messages_rev:
+        return HISTORY_BOOT[:]
     return list(reversed(messages_rev))
+
 
 # ========== Memória canônica (fatos/eventos/resumo) ==========
 def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
@@ -334,8 +344,7 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
 
 # ========== Utilidades ==========
 def limpar_memoria_usuario(usuario: str):
-    """Apaga apenas o histórico de chat (interações)."""
-    colecao.delete_many({"usuario": usuario})
+    colecao.delete_many({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
 def limpar_memoria_canonica(usuario: str):
     """Apaga apenas as memórias canônicas (fatos, eventos, resumo)."""
@@ -349,8 +358,11 @@ def apagar_tudo_usuario(usuario: str):
     limpar_memoria_canonica(usuario)
 
 def apagar_ultima_interacao_usuario(usuario: str):
-    """Remove as duas últimas entradas (user + assistant), se existirem."""
-    docs = list(colecao.find({"usuario": usuario}).sort([('_id', -1)]).limit(2))
-    if docs:
-        for doc in docs:
-            colecao.delete_one({'_id': doc['_id']})
+    docs = list(
+        colecao.find(
+            {"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}
+        ).sort([('_id', -1)]).limit(2)
+    )
+    for doc in docs:
+        colecao.delete_one({'_id': doc['_id']})
+
