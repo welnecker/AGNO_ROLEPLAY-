@@ -1,4 +1,5 @@
 # app/main.py
+import re
 import streamlit as st
 from datetime import datetime
 
@@ -10,7 +11,8 @@ from mongo_utils import (
     limpar_memoria_canonica,      # só memórias canônicas
     apagar_tudo_usuario,          # chat + memórias
     registrar_evento, set_fato, ultimo_evento,  # canônicas
-    get_fatos,                    # listar/editar fatos no sidebar
+    get_fatos,
+    colecao, db, state, eventos, perfil,        # para diagnóstico/checagens
 )
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
@@ -78,6 +80,23 @@ st.session_state.enredo_inicial = st.text_area(
     height=80
 )
 
+# ===== Helpers =====
+def _strip_elenco(messages):
+    """Remove pares __ELENCO__ (se existirem no DB antigo) da renderização."""
+    out = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg["role"] == "user" and msg["content"].strip() == "__ELENCO__":
+            i += 2  # pula também a resposta da Mary
+            continue
+        out.append(msg)
+        i += 1
+    return out
+
+def _usuario_regex(u: str):
+    return {"$regex": f"^{re.escape(u)}$", "$options": "i"}
+
 # ===== Controles de memória =====
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -101,37 +120,27 @@ with c3:
         st.session_state.mary_log = montar_historico_openrouter(USUARIO)
         st.info("Última interação apagada.")
 
-# ===== Carrega histórico =====
+# ===== Publica ENREDO antes de montar histórico (garante contexto na 1ª resposta) =====
+try:
+    ja_tem_enredo = colecao.count_documents({
+        "usuario": _usuario_regex(USUARIO),
+        "mensagem_usuario": "__ENREDO_INICIAL__"
+    }) > 0
+except Exception:
+    ja_tem_enredo = False
+
+if st.session_state.enredo_inicial.strip() and not ja_tem_enredo and not st.session_state.enredo_publicado:
+    salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
+    st.session_state.enredo_publicado = True
+
+# ===== Carrega histórico (agora já com enredo salvo, se for o caso) =====
 st.session_state.mary_log = montar_historico_openrouter(USUARIO)
-
-# 👉 Remover qualquer par __ELENCO__ apenas na renderização (para histórico antigo)
-def _strip_elenco(messages):
-    out = []
-    i = 0
-    while i < len(messages):
-        msg = messages[i]
-        if msg["role"] == "user" and msg["content"].strip() == "__ELENCO__":
-            i += 2  # pula também a resposta da Mary desse par
-            continue
-        out.append(msg)
-        i += 1
-    return out
-
 st.session_state.mary_log = _strip_elenco(st.session_state.mary_log)
-
-# ===== Publicação inicial (apenas Enredo) =====
-if not st.session_state.mary_log:
-    if st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado:
-        salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
-        st.session_state.enredo_publicado = True
-        st.session_state.mary_log = montar_historico_openrouter(USUARIO)
-        st.session_state.mary_log = _strip_elenco(st.session_state.mary_log)
 
 # ===== Sidebar: Memória Canônica (assistida) =====
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Memória Canônica (assistida)")
 
-# Catálogo mínimo de locais e gatilhos
 KNOWN_LOCATIONS = {
     "academia": {"academia", "gym", "musculação", "box"},
     "biblioteca": {"biblioteca", "biblio"},
@@ -145,7 +154,7 @@ KNOWN_LOCATIONS = {
 }
 def _norm(s: str) -> str:
     return " ".join((s or "").strip().lower().split())
-def _detect_location(text: str) -> str | None:
+def _detect_location(text: str):
     t = _norm(text)
     for label, variants in KNOWN_LOCATIONS.items():
         for v in variants:
@@ -230,21 +239,20 @@ with st.sidebar.expander("Fatos canônicos salvos"):
                 set_fato(USUARIO, k_edit2, v_edit2)
                 st.success(f"Atualizado: {k_edit2} = {v_edit2}")
 
-# ===== Diagnóstico (opcional, útil) =====
+# ===== Diagnóstico (opcional) =====
 with st.expander("🔍 Diagnóstico do banco"):
     try:
         from pymongo import DESCENDING
-        from mongo_utils import db, colecao, state, eventos, perfil
         st.write(f"**DB**: `{db.name}`")
         st.write(f"**Coleções**: {[c for c in db.list_collection_names()]}")
-        total_hist = colecao.count_documents({"usuario": USUARIO})
-        total_state = state.count_documents({"usuario": USUARIO})
-        total_eventos = eventos.count_documents({"usuario": USUARIO})
-        total_perfil = perfil.count_documents({"usuario": USUARIO})
+        total_hist = colecao.count_documents({"usuario": _usuario_regex(USUARIO)})
+        total_state = state.count_documents({"usuario": _usuario_regex(USUARIO)})
+        total_eventos = eventos.count_documents({"usuario": _usuario_regex(USUARIO)})
+        total_perfil = perfil.count_documents({"usuario": _usuario_regex(USUARIO)})
         st.write(f"Histórico (`mary_historia`): **{total_hist}**")
         st.write(f"Memória canônica — state: **{total_state}**, eventos: **{total_eventos}**, perfil: **{total_perfil}**")
         if total_hist:
-            ult = list(colecao.find({"usuario": USUARIO}).sort([("_id", DESCENDING)]).limit(5))
+            ult = list(colecao.find({"usuario": _usuario_regex(USUARIO)}).sort([("_id", DESCENDING)]).limit(5))
             st.write("Últimos 5 (histórico):")
             for d in ult:
                 st.code({
@@ -264,7 +272,7 @@ with chat:
     msgs = st.session_state.mary_log
     while i < len(msgs):
         msg = msgs[i]
-        # Bloco especial: Enredo inicial
+        # Bloco especial: Enredo inicial (renderiza e pula o par)
         if msg["role"] == "user" and msg["content"].strip() == "__ENREDO_INICIAL__":
             if i + 1 < len(msgs) and msgs[i + 1]["role"] == "assistant":
                 with st.chat_message("assistant", avatar="📝"):
@@ -272,7 +280,7 @@ with chat:
                 i += 2
                 continue
 
-        # ⚠️ Não exibir nem processar __ELENCO__ (pula o par se aparecer em histórico antigo)
+        # Pula qualquer par legado de ELENCO
         if msg["role"] == "user" and msg["content"].strip() == "__ELENCO__":
             i += 2
             continue
