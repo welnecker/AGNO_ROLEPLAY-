@@ -1,8 +1,9 @@
-# app/main.py
 import re
 import json
+import requests
 import streamlit as st
 from datetime import datetime
+
 from mongo_utils import (
     montar_historico_openrouter,
     salvar_interacao,
@@ -36,10 +37,12 @@ with c1:
         if st.session_state.modelo_escolhido in MODELOS_OPENROUTER else 0
     )
 with c2:
-    st.markdown(
+    etiqueta_modelo = st.empty()
+    etiqueta_modelo.markdown(
         f"""
-        <div style="background-color:#222;color:#eee;padding:6px 10px;border-radius:8px;
-                    font-size:12px;text-align:center;margin-top:28px;opacity:0.75;">
+        <div style="background-color: #222; color: #eee; padding: 6px 10px;
+                    border-radius: 8px; font-size: 12px; text-align: center;
+                    font-family: sans-serif; margin-top: 24px; opacity: 0.75;">
             <b>{st.session_state.modelo_escolhido}</b>
         </div>
         """,
@@ -63,11 +66,14 @@ st.session_state.sidebar_img_url = st.sidebar.text_input(
 st.sidebar.subheader("Ou envie um arquivo")
 upload_file = st.sidebar.file_uploader("PNG/JPG", type=["png", "jpg", "jpeg"])
 
+img_shown = False
 if upload_file is not None:
     st.sidebar.image(upload_file, use_container_width=True)
+    img_shown = True
 elif st.session_state.sidebar_img_url.strip():
     try:
         st.sidebar.image(st.session_state.sidebar_img_url.strip(), use_container_width=True)
+        img_shown = True
     except Exception:
         st.sidebar.warning("Não foi possível carregar a imagem da URL.")
 
@@ -76,8 +82,66 @@ st.session_state.sidebar_credito = st.sidebar.text_input(
     value=st.session_state.sidebar_credito,
     placeholder="Ilustração: @artista"
 )
-if st.session_state.sidebar_credito.strip():
+if img_shown and st.session_state.sidebar_credito.strip():
     st.sidebar.caption(st.session_state.sidebar_credito.strip())
+
+# ==== Memória Canônica assistida ====
+st.sidebar.subheader("🧠 Memória Canônica (assistida)")
+if "memoria_sugestao" not in st.session_state:
+    st.session_state.memoria_sugestao = ""
+    st.session_state.memoria_local = ""
+
+if st.session_state.get("ultima_resposta_mary") and not st.session_state.memoria_sugestao:
+    texto = st.session_state.ultima_resposta_mary
+    prompt_resumo = f"""
+Resuma o texto abaixo em UMA frase factual e objetiva, começando com "Mary ...", máximo 20 palavras.
+Depois, diga o local mais provável (Praia de Camburi, Serra Bella, Motel Status, Café Oregon, UFES, etc.).
+Responda em JSON: {{"resumo":"...","local":"..."}}
+
+Texto:
+{texto}
+"""
+    try:
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {st.secrets['OPENROUTER_TOKEN']}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "openai/gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt_resumo}],
+            "max_tokens": 100,
+            "temperature": 0.2
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        dados = json.loads(r.json()["choices"][0]["message"]["content"])
+        st.session_state.memoria_sugestao = dados.get("resumo", "").strip()
+        st.session_state.memoria_local = dados.get("local", "")
+    except Exception:
+        st.session_state.memoria_sugestao = texto[:200]
+        st.session_state.memoria_local = ""
+
+memoria_txt = st.sidebar.text_area(
+    "Resumo canônico sugerido",
+    value=st.session_state.memoria_sugestao,
+    placeholder="Ex.: Mary foi assediada por um surfista na Praia de Camburi, e Janio a protegeu."
+)
+if st.sidebar.button("💾 Salvar memória"):
+    if memoria_txt.strip():
+        registrar_evento(
+            usuario=st.session_state.get("usuario_fixado", "desconhecido"),
+            tipo="evento",
+            descricao=memoria_txt.strip(),
+            local=st.session_state.memoria_local or None,
+            data_hora=datetime.utcnow()
+        )
+        st.sidebar.success("Memória salva!")
+        st.session_state.memoria_sugestao = ""
+        st.session_state.memoria_local = ""
+if st.sidebar.button("🗑️ Descartar memória"):
+    st.session_state.memoria_sugestao = ""
+    st.session_state.memoria_local = ""
 
 # ===== Campos fixos =====
 st.session_state.setdefault("usuario_input", "welnecker")
@@ -87,9 +151,7 @@ st.session_state.setdefault("enredo_publicado", False)
 
 c1, c2 = st.columns([3, 1])
 with c1:
-    st.session_state.usuario_input = st.text_input(
-        "👤 Usuário", value=st.session_state.usuario_input, placeholder="Seu nome"
-    )
+    st.session_state.usuario_input = st.text_input("👤 Usuário", value=st.session_state.usuario_input, placeholder="Seu nome")
 with c2:
     if st.button("✅ Usar este usuário"):
         st.session_state.usuario_fixado = st.session_state.usuario_input.strip()
@@ -115,15 +177,17 @@ with c1:
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.success(f"Histórico de {USUARIO} apagado (memórias canônicas preservadas).")
+
 with c2:
     if st.button("🧠 Apagar TUDO (chat + memórias)"):
         apagar_tudo_usuario(USUARIO)
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.success(f"Chat e memórias canônicas de {USUARIO} foram apagados.")
+
 with c3:
-    from mongo_utils import apagar_ultima_interacao_usuario
     if st.button("⏪ Apagar último turno"):
+        from mongo_utils import apagar_ultima_interacao_usuario
         apagar_ultima_interacao_usuario(USUARIO)
         st.session_state.mary_log = montar_historico_openrouter(USUARIO)
         st.info("Última interação apagada.")
@@ -141,15 +205,11 @@ st.session_state.mary_log = montar_historico_openrouter(USUARIO)
 # ===== Chat =====
 chat = st.container()
 with chat:
-    i = 0
-    msgs = st.session_state.mary_log
-    while i < len(msgs):
-        msg = msgs[i]
+    for i, msg in enumerate(st.session_state.mary_log):
         if msg["role"] == "user" and msg["content"].strip() == "__ENREDO_INICIAL__":
-            if i + 1 < len(msgs) and msgs[i+1]["role"] == "assistant":
+            if i + 1 < len(st.session_state.mary_log) and st.session_state.mary_log[i+1]["role"] == "assistant":
                 with st.chat_message("assistant", avatar="📝"):
-                    st.markdown(f"**Cenário inicial**\n\n{msgs[i+1]['content']}")
-                i += 2
+                    st.markdown(f"**Cenário inicial**\n\n{st.session_state.mary_log[i+1]['content']}")
                 continue
         if msg["role"] == "user":
             with st.chat_message("user"):
@@ -158,7 +218,6 @@ with chat:
         else:
             with st.chat_message("assistant", avatar="💚"):
                 st.markdown(msg["content"])
-        i += 1
 
 # ===== Input fixo no rodapé =====
 if prompt := st.chat_input("Envie sua mensagem para Mary"):
@@ -167,72 +226,7 @@ if prompt := st.chat_input("Envie sua mensagem para Mary"):
     resposta = gerar_resposta_openrouter(prompt, USUARIO, model=st.session_state.modelo_escolhido)
     salvar_interacao(USUARIO, prompt, resposta)
     st.session_state.ultima_resposta_mary = resposta
+    st.session_state.memoria_sugestao = ""  # limpa sugestão antiga
     st.session_state.mary_log = montar_historico_openrouter(USUARIO)
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(resposta)
-
-# ===== Sidebar: Memória Canônica assistida =====
-st.sidebar.markdown("---")
-st.sidebar.subheader("🧠 Memória Canônica (assistida)")
-
-if st.session_state.get("ultima_resposta_mary"):
-        if not st.session_state.get("memoria_sugestao"):
-        import requests, json
-        texto = st.session_state.ultima_resposta_mary
-        prompt_resumo = f"""
-Resuma o texto abaixo em UMA frase factual e objetiva, começando com "Mary ...", máximo 20 palavras.
-Depois, diga o local mais provável (Praia de Camburi, Serra Bella, Motel Status, Café Oregon, UFES, etc.).
-Responda em JSON: {{"resumo":"...","local":"..."}}
-
-Texto:
-{texto}
-"""
-        try:
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {st.secrets['OPENROUTER_TOKEN']}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "openai/gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt_resumo}],
-                "max_tokens": 100,
-                "temperature": 0.2
-            }
-            r = requests.post(url, headers=headers, json=payload, timeout=60)
-            r.raise_for_status()
-            dados = json.loads(r.json()["choices"][0]["message"]["content"])
-            st.session_state.memoria_sugestao = dados.get("resumo", "").strip()
-            st.session_state.memoria_local = dados.get("local", "")
-        except Exception:
-            st.session_state.memoria_sugestao = texto[:200]
-            st.session_state.memoria_local = ""
-
-    st.session_state.memoria_sugestao = st.sidebar.text_area(
-        "Sugestão de memória", value=st.session_state.memoria_sugestao, height=80
-    )
-    st.session_state.memoria_local = st.sidebar.text_input(
-        "Local (opcional)", value=st.session_state.memoria_local or ""
-    )
-
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("✅ Salvar memória"):
-            registrar_evento(
-                USUARIO,
-                tipo="evento_cena",
-                descricao=st.session_state.memoria_sugestao,
-                local=st.session_state.memoria_local or None
-            )
-            st.sidebar.success("Memória salva!")
-            st.session_state.ultima_resposta_mary = ""
-            st.session_state.memoria_sugestao = ""
-            st.session_state.memoria_local = ""
-    with col2:
-        if st.button("❌ Descartar"):
-            st.session_state.ultima_resposta_mary = ""
-            st.session_state.memoria_sugestao = ""
-            st.session_state.memoria_local = ""
-            st.sidebar.info("Memória descartada.")
-else:
-    st.sidebar.info("Nenhuma memória pendente.")
