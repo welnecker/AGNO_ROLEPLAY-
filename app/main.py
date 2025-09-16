@@ -13,6 +13,48 @@ from mongo_utils import (
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
 
+# ==== Sidebar (logo/ilustração) ====
+st.sidebar.title("Mary Massariol")
+st.sidebar.caption("Roleplay imersivo")
+
+# guarda preferências na sessão
+st.session_state.setdefault("sidebar_img_url", "")
+st.session_state.setdefault("sidebar_credito", "")
+
+# opção 1: URL remota
+st.sidebar.subheader("Imagem (URL)")
+st.session_state.sidebar_img_url = st.sidebar.text_input(
+    "Cole uma URL de imagem",
+    value=st.session_state.sidebar_img_url,
+    placeholder="https://exemplo.com/mary.png"
+)
+
+# opção 2: upload local
+st.sidebar.subheader("Ou envie um arquivo")
+upload_file = st.sidebar.file_uploader("PNG/JPG", type=["png", "jpg", "jpeg"])
+
+# tenta exibir — prioridade: upload > URL
+img_shown = False
+if upload_file is not None:
+    st.sidebar.image(upload_file, use_container_width=True)
+    img_shown = True
+elif st.session_state.sidebar_img_url.strip():
+    try:
+        st.sidebar.image(st.session_state.sidebar_img_url.strip(), use_container_width=True)
+        img_shown = True
+    except Exception:
+        st.sidebar.warning("Não foi possível carregar a imagem da URL.")
+
+# crédito/legenda opcional
+st.session_state.sidebar_credito = st.sidebar.text_input(
+    "Crédito/legenda (opcional)",
+    value=st.session_state.sidebar_credito,
+    placeholder="Ilustração: @artista"
+)
+if img_shown and st.session_state.sidebar_credito.strip():
+    st.sidebar.caption(st.session_state.sidebar_credito.strip())
+
+
 # ===== Campos fixos =====
 st.session_state.setdefault("usuario_input", "welnecker")
 st.session_state.setdefault("usuario_fixado", None)
