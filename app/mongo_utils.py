@@ -6,6 +6,22 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import tiktoken
 import requests
+from typing import Optional, Dict, Any
+from datetime import datetime
+
+# se ainda não existir:
+def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
+    state.update_one(
+        {"usuario": usuario},
+        {
+            "$set": {
+                f"fatos.{chave}": valor,
+                f"meta.{chave}": (meta or {"fonte": "evento"}),
+                "atualizado_em": datetime.utcnow(),
+            }
+        },
+        upsert=True
+    )
 
 # ========== Mongo ==========
 mongo_user = st.secrets["MONGO_USER"]
@@ -146,6 +162,69 @@ def construir_contexto_memoria(usuario: str) -> str:
         linhas.append(f"RESUMO: {resumo[:500]}")
     return "\n".join(linhas).strip()
 
+
+def _aplicar_regras_evento_para_fatos(
+    usuario: str,
+    tipo: str,
+    descricao: str,
+    local: Optional[str],
+    ts: datetime
+):
+    """
+    Regras de sincronização evento -> fatos canônicos.
+    Expanda livremente conforme sua história evoluir.
+    """
+    t = (tipo or "").strip().lower()
+
+    if t == "primeiro_encontro":
+        # Fixa o local do primeiro encontro
+        if local:
+            set_fato(usuario, "primeiro_encontro", local, meta={"fonte": "evento", "ts": ts})
+        # Opcional: um resumo curto
+        set_fato(usuario, "primeiro_encontro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    elif t == "primeira_vez":
+        # Passa a não-virgem, e salva local
+        set_fato(usuario, "virgem", False, meta={"fonte": "evento", "ts": ts})
+        if local:
+            set_fato(usuario, "primeira_vez_local", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "primeira_vez_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    elif t == "episodio_ciume_praia":
+        # Mantém último episódio de ciúme e local
+        if local:
+            set_fato(usuario, "episodio_ciume_local", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "episodio_ciume_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    # exemplo: pedido de namoro
+    elif t == "pedido_namoro":
+        set_fato(usuario, "relacionamento_status", "namorando", meta={"fonte": "evento", "ts": ts})
+        if local:
+            set_fato(usuario, "pedido_namoro_local", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "pedido_namoro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+
+def registrar_evento_canonico(
+    usuario: str,
+    tipo: str,
+    descricao: str,
+    local: Optional[str] = None,
+    data_hora: Optional[datetime] = None,
+    atualizar_fatos: bool = True,
+):
+    """
+    Wrapper: registra o evento e, opcionalmente, sincroniza fatos canônicos.
+    """
+    ts = data_hora or datetime.utcnow()
+    eventos.insert_one({
+        "usuario": usuario,
+        "tipo": tipo,
+        "descricao": descricao,
+        "local": local,
+        "ts": ts
+    })
+    if atualizar_fatos:
+        _aplicar_regras_evento_para_fatos(usuario, tipo, descricao, local, ts)
 # ========== Validadores ==========
 _RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
 _RE_PROIBIDO_CURSO = re.compile(r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|administraç\w*|econom\w*|sistemas?\b.*inform)\b", re.IGNORECASE)
