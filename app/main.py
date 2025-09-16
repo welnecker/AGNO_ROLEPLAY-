@@ -302,12 +302,14 @@ with st.expander("🔍 Diagnóstico do banco"):
         st.error(f"Falha no diagnóstico: {e}")
 
 # ================== Chat ==================
+# ===== Chat =====
 chat = st.container()
 with chat:
     i = 0
     msgs = st.session_state.mary_log
     while i < len(msgs):
         msg = msgs[i]
+
         # Bloco especial: Enredo inicial
         if msg["role"] == "user" and msg["content"].strip() == "__ENREDO_INICIAL__":
             if i + 1 < len(msgs) and msgs[i + 1]["role"] == "assistant":
@@ -315,13 +317,9 @@ with chat:
                     st.markdown(f"**Cenário inicial**\n\n{msgs[i+1]['content']}")
                 i += 2
                 continue
-        # Bloco especial: Elenco
-        if msg["role"] == "user" and msg["content"].strip() == "__ELENCO__":
-            if i + 1 < len(msgs) and msgs[i + 1]["role"] == "assistant":
-                with st.chat_message("assistant", avatar="🎭"):
-                    st.markdown(msgs[i+1]["content"])
-                i += 2
-                continue
+
+        # ⚠️ REMOVIDO: bloco especial de elenco (__ELENCO__)
+
         # Mensagens normais
         if msg["role"] == "user":
             with st.chat_message("user"):
@@ -331,6 +329,7 @@ with chat:
             with st.chat_message("assistant", avatar="💚"):
                 st.markdown(msg["content"])
         i += 1
+
 
 # ================== Input fixo no rodapé ==================
 if prompt := st.chat_input("Envie sua mensagem para Mary"):
