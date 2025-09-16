@@ -1,8 +1,10 @@
+# mongo_utils.py
 import re
 import streamlit as st
 from pymongo import MongoClient
 from urllib.parse import quote_plus
 from datetime import datetime
+from typing import Optional, Dict, Any, List, Tuple
 import tiktoken
 import requests
 
@@ -16,12 +18,14 @@ MONGO_URI = (
 )
 client = MongoClient(MONGO_URI)
 db = client["AgnoRoleplay"]
+
+# Histórico de chat
 colecao = db["mary_historia"]
 
-# Memória canônica (coleções extras)
-state = db["mary_state"]        # fatos atuais
-eventos = db["mary_eventos"]    # linha do tempo
-perfil = db["mary_perfil"]      # resumo/sinopse
+# Memória canônica (coleções separadas)
+state = db["mary_state"]        # fatos atuais (um doc por usuário)
+eventos = db["mary_eventos"]    # linha do tempo (vários docs por usuário)
+perfil = db["mary_perfil"]      # resumo/sinopse (um doc por usuário)
 
 # ========== Tokenizer ==========
 tokenizer = tiktoken.get_encoding("cl100k_base")
@@ -62,7 +66,9 @@ CENÁRIO / PAPÉIS PROIBIDOS (salvo se o usuário definir explicitamente)
 - Não adotar papéis de empregada/patroa/serviçal; evitar temas religiosos traumáticos (exorcismo, demônios, crucifixo).
 
 LOCAIS COMUNS (usar quando fizer sentido)
-- Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros), Praia de Camburi (lazer), Enseada do Suá (deserta para sexo ao anoitecer), Restaurante Partido Alto em camburi (Almoço), Quiosque Posto 6 em Camburi (Drinks a beira mar).
+- Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros),
+  Praia de Camburi (lazer), Enseada do Suá (deserta à noite), Restaurante Partido Alto (Camburi — almoço),
+  Quiosque Posto 6 (Camburi — drinks à beira-mar).
 
 ESTILO — SAÍDA ESPERADA
 - Produza de 3 a 5 parágrafos por turno, com 2 a 3 frases por parágrafo, mantendo fluidez natural.
@@ -97,9 +103,10 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "timestamp": datetime.now().isoformat()
     })
 
-def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
+def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> List[Dict[str, str]]:
     docs = list(colecao.find({"usuario": usuario}).sort([("_id", 1)]))
-    messages_rev, total_tokens = [], 0
+    messages_rev: List[Dict[str, str]] = []
+    total_tokens = 0
     for doc in reversed(docs):
         u = (doc.get("mensagem_usuario") or "")
         a = (doc.get("resposta_mary") or "")
@@ -112,7 +119,7 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
     return list(reversed(messages_rev))
 
 # ========== Memória canônica (fatos/eventos/resumo) ==========
-def set_fato(usuario: str, chave: str, valor, meta=None):
+def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
     state.update_one(
         {"usuario": usuario},
         {"$set": {f"fatos.{chave}": valor, f"meta.{chave}": (meta or {}), "atualizado_em": datetime.utcnow()}},
@@ -123,7 +130,13 @@ def get_fato(usuario: str, chave: str, default=None):
     doc = state.find_one({"usuario": usuario}, {"fatos."+chave: 1})
     return (doc or {}).get("fatos", {}).get(chave, default)
 
-def registrar_evento(usuario: str, tipo: str, descricao: str, local: str = None, data_hora: datetime = None, tags=None, extra=None):
+def get_fatos(usuario: str) -> Dict[str, Any]:
+    doc = state.find_one({"usuario": usuario}, {"fatos": 1})
+    return (doc or {}).get("fatos", {}) or {}
+
+def registrar_evento(usuario: str, tipo: str, descricao: str,
+                     local: Optional[str] = None, data_hora: Optional[datetime] = None,
+                     tags: Optional[List[str]] = None, extra: Optional[Dict] = None):
     eventos.insert_one({
         "usuario": usuario,
         "tipo": tipo,
@@ -139,28 +152,47 @@ def ultimo_evento(usuario: str, tipo: str):
 
 def get_resumo(usuario: str) -> str:
     doc = perfil.find_one({"usuario": usuario}, {"resumo": 1})
-    return (doc or {}).get("resumo", "")
+    return (doc or {}).get("resumo", "") or ""
 
 def construir_contexto_memoria(usuario: str) -> str:
-    linhas = []
-    virgem = get_fato(usuario, "virgem", None)
-    if virgem is not None:
-        linhas.append(f"STATUS ÍNTIMO: virgem={bool(virgem)}")
-    parceiro = get_fato(usuario, "parceiro_atual", None)
-    if parceiro:
-        linhas.append(f"RELACIONAMENTO: parceiro_atual={parceiro}")
-    cidade = get_fato(usuario, "cidade_atual", None)
-    if cidade:
-        linhas.append(f"LOCAL: cidade_atual={cidade}")
+    """
+    Constrói um bloco curto com fatos e eventos úteis para coerência narrativa.
+    Injetado como mensagem de 'system' antes do histórico.
+    """
+    linhas: List[str] = []
+    fatos = get_fatos(usuario)
+
+    # Fatos frequentes
+    if "virgem" in fatos:
+        linhas.append(f"STATUS ÍNTIMO: virgem={bool(fatos['virgem'])}")
+    if "parceiro_atual" in fatos:
+        linhas.append(f"RELACIONAMENTO: parceiro_atual={fatos['parceiro_atual']}")
+    if "relacionamento_status" in fatos:
+        linhas.append(f"RELACIONAMENTO_STATUS: {fatos['relacionamento_status']}")
+    if "cidade_atual" in fatos:
+        linhas.append(f"LOCAL: cidade_atual={fatos['cidade_atual']}")
+    if "primeiro_encontro" in fatos:
+        linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
+
+    # Eventos canônicos comuns
     e_primeira = ultimo_evento(usuario, "primeira_vez")
     if e_primeira:
         dt = e_primeira["ts"].strftime("%Y-%m-%d %H:%M")
         lugar = e_primeira.get("local") or "local não especificado"
         linhas.append(f"EVENTO_CANÔNICO: primeira_vez em {dt} @ {lugar}")
+
+    e_ciume = ultimo_evento(usuario, "episodio_ciume_praia")
+    if e_ciume:
+        dt = e_ciume["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_ciume.get("local") or "Praia"
+        linhas.append(f"ÚLTIMO_EVENTO_CIUME: {dt} @ {lugar} — surfista tentou flertar; Janio interveio.")
+
+    # Resumo curto
     resumo = get_resumo(usuario)
     if resumo:
         linhas.append(f"RESUMO: {resumo[:600]}")
-    return "\n".join(linhas)
+
+    return "\n".join(linhas).strip()
 
 # ========== Validadores (anti-violação) ==========
 _RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
@@ -171,12 +203,61 @@ _RE_DESVIO_PAPEL = re.compile(r"\b(patroa|patr[ãa]o|empregad[ao]|avental|\bserv
 _RE_NEGAR_UFES = re.compile(r"\bn[ãa]o estudo\b.*UFES", re.IGNORECASE)
 _RE_TEMAS_RELIGIOSOS = re.compile(r"\b(exorcismo|exorcist|crucifixo|dem[oô]nios?|anjos?|inferno|igreja|fé inquebrantável|orações?)\b", re.IGNORECASE)
 
+# Catálogo de locais (para verificação genérica)
+def _norm(s: Optional[str]) -> str:
+    return " ".join((s or "").strip().lower().split())
+
+_KNOWN_LOCATIONS: Dict[str, set] = {
+    "academia": {"academia", "gym", "musculação", "box"},
+    "biblioteca": {"biblioteca", "biblio"},
+    "serra bella": {"serra bella", "serra bela", "clube serra bella"},
+    "ufes": {"ufes", "universidade federal do espírito santo"},
+    "estacionamento": {"estacionamento", "vaga", "pátio"},
+    "praia": {"praia", "areia", "beira-mar"},
+    "motel status": {"motel status", "status"},
+    "café oregon": {"café oregon", "cafe oregon", "oregon"},
+    "enseada do suá": {"enseada do suá", "enseada"},
+}
+# Quais chaves de fato são "de local" (expansível sem mudar lógica)
+_CANON_LOCAL_KEYS: List[str] = [
+    "primeiro_encontro",
+    "primeira_vez_local",
+    "pedido_namoro_local",
+    "episodio_ciume_local",
+]
+
+def _mentioned_location(txt_norm: str) -> Optional[str]:
+    for label, variants in _KNOWN_LOCATIONS.items():
+        for v in variants:
+            if v in txt_norm:
+                return label
+    return None
+
+def _violou_locais_canonicos(usuario: str, txt: str) -> bool:
+    """
+    Verifica genericamente contradições de locais:
+    se há fato canônico p/ uma chave de local, e a resposta cita outro local distinto.
+    """
+    fatos = get_fatos(usuario)
+    if not fatos:
+        return False
+    t = _norm(txt)
+    loc_citada = _mentioned_location(t)
+    if not loc_citada:
+        return False
+    for key in _CANON_LOCAL_KEYS:
+        if key in fatos:
+            loc_canon = _norm(str(fatos[key]))
+            if loc_canon and loc_canon != loc_citada:
+                return True
+    return False
+
 def _violou_virgindade(usuario: str, txt: str) -> bool:
     if ultimo_evento(usuario, "primeira_vez"):
         return bool(re.search(r"\b(sou|ainda sou|continuo)\s+virgem\b", txt, flags=re.IGNORECASE))
     return False
 
-def _violou_mary(txt: str, usuario: str = None) -> bool:
+def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
     base = any([
         _RE_PROIBIDO_CABELO.search(txt),
         _RE_PROIBIDO_CURSO.search(txt),
@@ -186,11 +267,12 @@ def _violou_mary(txt: str, usuario: str = None) -> bool:
         _RE_NEGAR_UFES.search(txt),
         _RE_TEMAS_RELIGIOSOS.search(txt),
     ])
-    if usuario:
-        return base or _violou_virgindade(usuario, txt)
-    return base
+    if not usuario:
+        return base
+    # Regras contextuais
+    return base or _violou_virgindade(usuario, txt) or _violou_locais_canonicos(usuario, txt)
 
-def _reforco_system():
+def _reforco_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
@@ -198,28 +280,32 @@ def _reforco_system():
             "- Cabelo: 'Meus cabelos são negros, volumosos e soltos.' Nunca outra cor.\n"
             "- Curso/Faculdade: 'Eu estudo Engenharia Civil na UFES.' Nunca outro curso/faculdade.\n"
             "- Mãe: 'O nome da minha mãe é Joselina.' Nunca outro nome nem tragédias religiosas associadas.\n"
-            "- Papel/Cenário: não usar papéis de empregada/patroa/serviço doméstico salvo se o usuário definir explicitamente."
+            "- Papel/Cenário: não usar papéis de empregada/patroa/serviço doméstico salvo se o usuário definir explicitamente.\n"
+            "- Se houver fato canônico de LOCAL, respeite-o (ex.: primeiro_encontro = academia)."
         )
     }
 
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
-def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "deepseek/deepseek-chat-v3-0324", limite_tokens_hist: int = 120000):
+def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
+                              model: str = "deepseek/deepseek-chat-v3-0324",
+                              limite_tokens_hist: int = 120000) -> str:
     OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENROUTER_TOKEN}", "Content-Type": "application/json"}
 
+    # Histórico
     hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
     if not hist:
         hist = HISTORY_BOOT[:]
 
-    # Injeção de memória canônica
+    # Memória canônica → system message
     memoria_txt = construir_contexto_memoria(usuario)
-    memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt}] if memoria_txt.strip() else []
+    memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt}] if memoria_txt else []
 
-    # Mensagens com reforço de estilo
+    # Mensagens
     messages = [
         {"role": "system", "content": PERSONA_MARY},
-        {"role": "system", "content": "Estilo: produza 3 a 5 parágrafos, com 2 a 3 frases por parágrafo, usando um traço sensorial por parágrafo e mantendo o clima da cena."},
+        {"role": "system", "content": "Estilo: 3–5 parágrafos; 2–3 frases por parágrafo; um traço sensorial por parágrafo; clima natural e coeso."},
     ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
     payload = {
@@ -236,7 +322,7 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "d
     r.raise_for_status()
     resposta = r.json()["choices"][0]["message"]["content"]
 
-    # Retry se violar
+    # Retry se violar coerência/estilo/persona
     if _violou_mary(resposta, usuario):
         messages.insert(1, _reforco_system())
         payload["messages"] = messages
@@ -247,7 +333,6 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "d
     return resposta
 
 # ========== Utilidades ==========
-
 def limpar_memoria_usuario(usuario: str):
     """Apaga apenas o histórico de chat (interações)."""
     colecao.delete_many({"usuario": usuario})
@@ -269,4 +354,3 @@ def apagar_ultima_interacao_usuario(usuario: str):
     if docs:
         for doc in docs:
             colecao.delete_one({'_id': doc['_id']})
-
