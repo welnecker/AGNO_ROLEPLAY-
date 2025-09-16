@@ -1,6 +1,7 @@
 # app/main.py
 import streamlit as st
 from datetime import datetime
+from typing import Optional, List, Tuple
 
 from mongo_utils import (
     montar_historico_openrouter,
@@ -9,9 +10,14 @@ from mongo_utils import (
     limpar_memoria_usuario,       # só chat
     limpar_memoria_canonica,      # só memórias canônicas
     apagar_tudo_usuario,          # chat + memórias
-    registrar_evento, set_fato, ultimo_evento,  # canônicas
-    get_fatos,                    # para listar fatos salvos no sidebar
 )
+
+# ---- imports opcionais (podem não existir ainda no seu mongo_utils) ----
+HAS_CANON = True
+try:
+    from mongo_utils import registrar_evento, set_fato, ultimo_evento, get_fatos
+except Exception:
+    HAS_CANON = False
 
 # ================== Setup ==================
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
@@ -135,119 +141,129 @@ if not st.session_state.mary_log:
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Memória Canônica (assistida)")
 
-# Vocabulário simples de locais (pode expandir via código; no futuro dá pra mover pra Mongo)
-KNOWN_LOCATIONS = {
-    "academia": {"academia", "gym", "musculação", "box"},
-    "biblioteca": {"biblioteca", "biblio"},
-    "serra bella": {"serra bella", "serra bela", "clube serra bella"},
-    "ufes": {"ufes", "universidade federal do espírito santo"},
-    "estacionamento": {"estacionamento", "vaga", "pátio"},
-    "praia": {"praia", "areia", "beira-mar"},
-    "motel status": {"motel status", "status"},
-    "café oregon": {"café oregon", "cafe oregon", "oregon"},
-    "enseada do suá": {"enseada do suá", "enseada"},
-}
-LOCAL_KEYS = [
-    "primeiro_encontro",
-    "primeira_vez_local",
-    "pedido_namoro_local",
-    "episodio_ciume_local",
-]
+if not HAS_CANON:
+    st.sidebar.info(
+        "Painel desativado: exponha no `mongo_utils.py` as funções "
+        "`set_fato`, `registrar_evento`, `get_fatos` e `ultimo_evento` "
+        "ou use a versão com coleção única `memorias`."
+    )
+else:
+    # Vocabulário simples de locais (catálogo mínimo)
+    KNOWN_LOCATIONS = {
+        "academia": {"academia", "gym", "musculação", "box"},
+        "biblioteca": {"biblioteca", "biblio"},
+        "serra bella": {"serra bella", "serra bela", "clube serra bella"},
+        "ufes": {"ufes", "universidade federal do espírito santo"},
+        "estacionamento": {"estacionamento", "vaga", "pátio"},
+        "praia": {"praia", "areia", "beira-mar"},
+        "motel status": {"motel status", "status"},
+        "café oregon": {"café oregon", "cafe oregon", "oregon"},
+        "enseada do suá": {"enseada do suá", "enseada"},
+    }
+    LOCAL_KEYS = [
+        "primeiro_encontro",
+        "primeira_vez_local",
+        "pedido_namoro_local",
+        "episodio_ciume_local",
+    ]
 
-def _norm(s: str) -> str:
-    return " ".join((s or "").strip().lower().split())
+    def _norm(s: Optional[str]) -> str:
+        return " ".join((s or "").strip().lower().split())
 
-def _detect_location(text: str) -> str | None:
-    t = _norm(text)
-    for label, variants in KNOWN_LOCATIONS.items():
-        for v in variants:
-            if v in t:
-                return label
-    return None
+    def _detect_location(text: str) -> Optional[str]:
+        t = _norm(text)
+        for label, variants in KNOWN_LOCATIONS.items():
+            for v in variants:
+                if v in t:
+                    return label
+        return None
 
-def _sugerir_fatos(mensagens: list[dict]) -> list[tuple[str, str, str]]:
-    """Retorna sugestões (key, value, justificativa) com base nas últimas 6 mensagens."""
-    sugestoes = []
-    janela = mensagens[-6:] if len(mensagens) > 6 else mensagens
-    gatilhos_primeiro_encontro = {"primeiro encontro", "primeira vez que nos vimos", "nos vimos pela primeira vez"}
-    gatilhos_primeira_vez = {"primeira vez", "deixou de ser virgem"}
-    gatilhos_pedido = {"pedido de namoro", "oficializamos", "ficamos oficiais"}
-    gatilhos_ciume = {"ciúme", "ciume", "protetor", "afugentou", "afastou", "mexeu comigo", "flertar com você na praia"}
+    def _sugerir_fatos(mensagens: List[dict]) -> List[Tuple[str, str, str]]:
+        """Retorna sugestões (key, value, justificativa) com base nas últimas 6 mensagens."""
+        sugestoes: List[Tuple[str, str, str]] = []
+        janela = mensagens[-6:] if len(mensagens) > 6 else mensagens
+        gatilhos_primeiro_encontro = {"primeiro encontro", "primeira vez que nos vimos", "nos vimos pela primeira vez"}
+        gatilhos_primeira_vez = {"primeira vez", "deixou de ser virgem"}
+        gatilhos_pedido = {"pedido de namoro", "oficializamos", "ficamos oficiais"}
+        gatilhos_ciume = {"ciúme", "ciume", "protetor", "afugentou", "afastou", "flertar com você na praia"}
 
-    for msg in janela:
-        txt = msg.get("content", "")
-        loc = _detect_location(txt)  # pode ser None
-        t = _norm(txt)
+        for msg in janela:
+            txt = msg.get("content", "")
+            loc = _detect_location(txt)  # pode ser None
+            t = _norm(txt)
 
-        if loc and any(g in t for g in gatilhos_primeiro_encontro):
-            sugestoes.append(("primeiro_encontro", loc, "Detectado 'primeiro encontro' + local"))
-        if loc and any(g in t for g in gatilhos_primeira_vez):
-            sugestoes.append(("primeira_vez_local", loc, "Detectado 'primeira vez' + local"))
-        if loc and any(g in t for g in gatilhos_pedido):
-            sugestoes.append(("pedido_namoro_local", loc, "Detectado 'pedido de namoro' + local"))
-        if any(g in t for g in gatilhos_ciume) and loc:
-            sugestoes.append(("episodio_ciume_local", loc, "Detectado episódio de ciúme + local"))
+            if loc and any(g in t for g in gatilhos_primeiro_encontro):
+                sugestoes.append(("primeiro_encontro", loc, "Detectado 'primeiro encontro' + local"))
+            if loc and any(g in t for g in gatilhos_primeira_vez):
+                sugestoes.append(("primeira_vez_local", loc, "Detectado 'primeira vez' + local"))
+            if loc and any(g in t for g in gatilhos_pedido):
+                sugestoes.append(("pedido_namoro_local", loc, "Detectado 'pedido de namoro' + local"))
+            if any(g in t for g in gatilhos_ciume) and loc:
+                sugestoes.append(("episodio_ciume_local", loc, "Detectado episódio de ciúme + local"))
 
-    # dedup mantendo ordem
-    seen, uniq = set(), []
-    for k, v, j in sugestoes:
-        sig = (k, v)
-        if sig not in seen:
-            uniq.append((k, v, j))
-            seen.add(sig)
-    return uniq
+        # dedup mantendo ordem
+        seen, uniq = set(), []
+        for k, v, j in sugestoes:
+            sig = (k, v)
+            if sig not in seen:
+                uniq.append((k, v, j))
+                seen.add(sig)
+        return uniq
 
-msgs_atual = st.session_state.get("mary_log", [])
-sugs = _sugerir_fatos(msgs_atual)
+    msgs_atual = st.session_state.get("mary_log", [])
+    sugs = _sugerir_fatos(msgs_atual)
 
-with st.sidebar.expander("Sugestões a partir do diálogo", expanded=bool(sugs)):
-    if not sugs:
-        st.caption("Sem sugestões automáticas no momento.")
-    else:
-        idx = st.selectbox(
-            "Escolha uma sugestão",
-            options=list(range(len(sugs))),
-            format_func=lambda i: f"{sugs[i][0]} = {sugs[i][1]}  ·  {sugs[i][2]}",
-        )
-        key_sug, val_sug, _ = sugs[idx]
-        key_edit = st.text_input("Chave (fato canônico)", value=key_sug, key="fact_key_edit")
-        val_edit = st.text_input("Valor (ex.: academia, praia...)", value=val_sug, key="fact_val_edit")
-        salvar_como_evento = st.checkbox("Também registrar como evento datado", value=False, key="fact_as_event")
-        if salvar_como_evento:
-            evento_tipo = st.text_input("Tipo do evento", value=key_edit.replace("_local", "").replace("_", " "), key="fact_event_type")
-            evento_local = st.text_input("Local do evento", value=val_edit, key="fact_event_local")
-        if st.button("💾 Salvar fato canônico"):
-            set_fato(USUARIO, key_edit.strip(), val_edit.strip())
+    with st.sidebar.expander("Sugestões a partir do diálogo", expanded=bool(sugs)):
+        if not sugs:
+            st.caption("Sem sugestões automáticas no momento.")
+        else:
+            idx = st.selectbox(
+                "Escolha uma sugestão",
+                options=list(range(len(sugs))),
+                format_func=lambda i: f"{sugs[i][0]} = {sugs[i][1]}  ·  {sugs[i][2]}",
+            )
+            key_sug, val_sug, _ = sugs[idx]
+            key_edit = st.text_input("Chave (fato canônico)", value=key_sug, key="fact_key_edit")
+            val_edit = st.text_input("Valor (ex.: academia, praia...)", value=val_sug, key="fact_val_edit")
+            salvar_como_evento = st.checkbox("Também registrar como evento datado", value=False, key="fact_as_event")
             if salvar_como_evento:
-                registrar_evento(
-                    USUARIO,
-                    tipo=_norm(evento_tipo or key_edit),
-                    descricao=f"{key_edit} = {val_edit}",
-                    local=(evento_local or val_edit),
-                    data_hora=datetime.utcnow(),
-                    tags=[key_edit],
-                )
-            st.success(f"Salvo: {key_edit} = {val_edit}")
+                evento_tipo = st.text_input("Tipo do evento", value=key_edit.replace("_local", "").replace("_", " "), key="fact_event_type")
+                evento_local = st.text_input("Local do evento", value=val_edit, key="fact_event_local")
+            if st.button("💾 Salvar fato canônico"):
+                set_fato(USUARIO, key_edit.strip(), val_edit.strip())
+                if salvar_como_evento:
+                    registrar_evento(
+                        USUARIO,
+                        tipo=_norm(evento_tipo or key_edit),
+                        descricao=f"{key_edit} = {val_edit}",
+                        local=(evento_local or val_edit),
+                        data_hora=datetime.utcnow(),
+                        tags=[key_edit],
+                    )
+                st.success(f"Salvo: {key_edit} = {val_edit}")
 
-with st.sidebar.expander("Fatos canônicos salvos"):
-    fatos = get_fatos(USUARIO)
-    if not fatos:
-        st.caption("Nenhum fato salvo ainda.")
-    else:
-        for k, v in fatos.items():
-            st.write(f"• **{k}** = {v}")
-        k_edit2 = st.selectbox("Editar chave", ["(selecionar)"] + list(fatos.keys()), key="fact_edit_select")
-        if k_edit2 != "(selecionar)":
-            v_edit2 = st.text_input("Novo valor", value=str(fatos[k_edit2]), key="fact_edit_value")
-            if st.button("✏️ Atualizar fato"):
-                set_fato(USUARIO, k_edit2, v_edit2)
-                st.success(f"Atualizado: {k_edit2} = {v_edit2}")
+    with st.sidebar.expander("Fatos canônicos salvos"):
+        try:
+            fatos = get_fatos(USUARIO)
+        except Exception as e:
+            fatos = {}
+        if not fatos:
+            st.caption("Nenhum fato salvo ainda.")
+        else:
+            for k, v in fatos.items():
+                st.write(f"• **{k}** = {v}")
+            k_edit2 = st.selectbox("Editar chave", ["(selecionar)"] + list(fatos.keys()), key="fact_edit_select")
+            if k_edit2 != "(selecionar)":
+                v_edit2 = st.text_input("Novo valor", value=str(fatos[k_edit2]), key="fact_edit_value")
+                if st.button("✏️ Atualizar fato"):
+                    set_fato(USUARIO, k_edit2, v_edit2)
+                    st.success(f"Atualizado: {k_edit2} = {v_edit2}")
 
-# ================== Diagnóstico (compatível com coleção 'memorias') ==================
+# ================== Diagnóstico ==================
 with st.expander("🔍 Diagnóstico do banco"):
     try:
         from pymongo import DESCENDING
-        # Tenta importar a coleção unificada 'memorias'; se não existir, faz fallback
+        # primeiro tenta coleção unificada 'memorias'
         try:
             from mongo_utils import db, colecao, memorias
             tem_memorias = True
@@ -264,9 +280,9 @@ with st.expander("🔍 Diagnóstico do banco"):
             total_eventos= memorias.count_documents({"usuario": USUARIO, "kind": "evento"})
             total_perfil = memorias.count_documents({"usuario": USUARIO, "kind": "perfil"})
         else:
-            total_state  = state.count_documents({"usuario": USUARIO})
-            total_eventos= eventos.count_documents({"usuario": USUARIO})
-            total_perfil = perfil.count_documents({"usuario": USUARIO})
+            total_state  = state.count_documents({"usuario": USUARIO}) if 'state' in dir() else 0
+            total_eventos= eventos.count_documents({"usuario": USUARIO}) if 'eventos' in dir() else 0
+            total_perfil = perfil.count_documents({"usuario": USUARIO}) if 'perfil' in dir() else 0
 
         st.write(f"Histórico (`mary_historia`): **{total_hist}**")
         st.write(f"Memória canônica — state: **{total_state}**, eventos: **{total_eventos}**, perfil: **{total_perfil}**")
