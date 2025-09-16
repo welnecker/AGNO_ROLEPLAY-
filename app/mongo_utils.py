@@ -247,11 +247,26 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "d
     return resposta
 
 # ========== Utilidades ==========
-def limpar_memoria_usuario(usuario):
+
+def limpar_memoria_usuario(usuario: str):
+    """Apaga apenas o histórico de chat (interações)."""
     colecao.delete_many({"usuario": usuario})
 
-def apagar_ultima_interacao_usuario(usuario):
+def limpar_memoria_canonica(usuario: str):
+    """Apaga apenas as memórias canônicas (fatos, eventos, resumo)."""
+    state.delete_many({"usuario": usuario})
+    eventos.delete_many({"usuario": usuario})
+    perfil.delete_many({"usuario": usuario})
+
+def apagar_tudo_usuario(usuario: str):
+    """Apaga chat + memórias canônicas."""
+    limpar_memoria_usuario(usuario)
+    limpar_memoria_canonica(usuario)
+
+def apagar_ultima_interacao_usuario(usuario: str):
+    """Remove as duas últimas entradas (user + assistant), se existirem."""
     docs = list(colecao.find({"usuario": usuario}).sort([('_id', -1)]).limit(2))
     if docs:
         for doc in docs:
             colecao.delete_one({'_id': doc['_id']})
+
