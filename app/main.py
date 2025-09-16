@@ -1,6 +1,6 @@
-import re
 import json
 import requests
+import re
 import streamlit as st
 from datetime import datetime
 
@@ -12,8 +12,9 @@ from mongo_utils import (
     limpar_memoria_canonica,
     apagar_tudo_usuario,
     registrar_evento, set_fato, ultimo_evento,
-    colecao, db, state, eventos, perfil
+    get_fatos, get_resumo, eventos, perfil, colecao, db
 )
+
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
