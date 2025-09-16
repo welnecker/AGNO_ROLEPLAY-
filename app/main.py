@@ -3,8 +3,6 @@ import re
 import json
 import streamlit as st
 from datetime import datetime
-from openai import OpenAI
-
 from mongo_utils import (
     montar_historico_openrouter,
     salvar_interacao,
@@ -178,8 +176,8 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Memória Canônica (assistida)")
 
 if st.session_state.get("ultima_resposta_mary"):
-    if not st.session_state.get("memoria_sugestao"):
-        client = OpenAI(api_key=st.secrets["OPENROUTER_TOKEN"], base_url="https://openrouter.ai/api/v1")
+        if not st.session_state.get("memoria_sugestao"):
+        import requests, json
         texto = st.session_state.ultima_resposta_mary
         prompt_resumo = f"""
 Resuma o texto abaixo em UMA frase factual e objetiva, começando com "Mary ...", máximo 20 palavras.
@@ -190,12 +188,20 @@ Texto:
 {texto}
 """
         try:
-            r = client.chat.completions.create(
-                model="openai/gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt_resumo}],
-                max_tokens=100, temperature=0.2
-            )
-            dados = json.loads(r.choices[0].message.content)
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {st.secrets['OPENROUTER_TOKEN']}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "openai/gpt-4o-mini",
+                "messages": [{"role": "user", "content": prompt_resumo}],
+                "max_tokens": 100,
+                "temperature": 0.2
+            }
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+            r.raise_for_status()
+            dados = json.loads(r.json()["choices"][0]["message"]["content"])
             st.session_state.memoria_sugestao = dados.get("resumo", "").strip()
             st.session_state.memoria_local = dados.get("local", "")
         except Exception:
