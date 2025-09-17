@@ -3,18 +3,8 @@ import re
 import streamlit as st
 from datetime import datetime
 
-from mongo_utils import (
-    montar_historico_openrouter,
-    salvar_interacao,
-    gerar_resposta_openrouter,
-    limpar_memoria_usuario,
-    limpar_memoria_canonica,
-    apagar_tudo_usuario,
-    registrar_evento,              # ainda disponível, mas não usado no botão
-    registrar_evento_canonico,     # <- novo: wrapper que sincroniza fatos
-    get_fatos, get_resumo,
-    colecao, db, state, eventos, perfil
-)
+# Importa o módulo inteiro para permitir fallback caso algumas funções não existam
+import mongo_utils as mu
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
@@ -108,7 +98,7 @@ if st.session_state.mem_tipo == "Fato":
     with colf1:
         if st.button("💾 Salvar fato"):
             if st.session_state.mem_chave.strip() and st.session_state.mem_valor.strip():
-                state.update_one(
+                mu.state.update_one(
                     {"usuario": st.session_state.get("usuario_fixado", "desconhecido")},
                     {
                         "$set": {
@@ -148,16 +138,25 @@ else:
     with cole1:
         if st.button("💾 Salvar evento"):
             if st.session_state.mem_chave.strip() and st.session_state.mem_valor.strip():
-                # >>> usa o wrapper que também atualiza fatos canônicos
-                registrar_evento_canonico(
-                    usuario=st.session_state.get("usuario_fixado", "desconhecido"),
-                    tipo=st.session_state.mem_chave.strip(),
-                    descricao=st.session_state.mem_valor.strip(),
-                    local=(st.session_state.mem_local.strip() or None),
-                    data_hora=datetime.utcnow(),
-                    atualizar_fatos=True,
-                )
-                st.sidebar.success("Evento salvo (e fatos sincronizados)!")
+                # Usa wrapper se existir; caso contrário, cai no registrar_evento simples
+                if hasattr(mu, "registrar_evento_canonico"):
+                    mu.registrar_evento_canonico(
+                        usuario=st.session_state.get("usuario_fixado", "desconhecido"),
+                        tipo=st.session_state.mem_chave.strip(),
+                        descricao=st.session_state.mem_valor.strip(),
+                        local=(st.session_state.mem_local.strip() or None),
+                        data_hora=datetime.utcnow(),
+                        atualizar_fatos=True,
+                    )
+                else:
+                    mu.registrar_evento(
+                        usuario=st.session_state.get("usuario_fixado", "desconhecido"),
+                        tipo=st.session_state.mem_chave.strip(),
+                        descricao=st.session_state.mem_valor.strip(),
+                        local=(st.session_state.mem_local.strip() or None),
+                        data_hora=datetime.utcnow()
+                    )
+                st.sidebar.success("Evento salvo!")
                 st.session_state.mem_chave = ""
                 st.session_state.mem_valor = ""
                 st.session_state.mem_local = ""
@@ -171,9 +170,9 @@ else:
             st.sidebar.info("Edição descartada.")
 
 # Listagem rápida das memórias já salvas
-st.sidebar.markdown("—")
+st.sidebar.markdown("---")
 st.sidebar.caption("Memórias salvas")
-fatos_exist = get_fatos(st.session_state.get("usuario_fixado", "desconhecido"))
+fatos_exist = mu.get_fatos(st.session_state.get("usuario_fixado", "desconhecido"))
 if fatos_exist:
     st.sidebar.markdown("**Fatos**")
     for k, v in fatos_exist.items():
@@ -181,7 +180,7 @@ if fatos_exist:
 else:
     st.sidebar.write("_Nenhum fato salvo._")
 st.sidebar.markdown("**Eventos (últimos 5)**")
-for ev in list(eventos.find({"usuario": st.session_state.get("usuario_fixado", "desconhecido")}).sort([("ts", -1)]).limit(5)):
+for ev in list(mu.eventos.find({"usuario": st.session_state.get("usuario_fixado", "desconhecido")}).sort([("ts", -1)]).limit(5)):
     ts = ev.get("ts").strftime("%Y-%m-%d %H:%M") if ev.get("ts") else "sem data"
     st.sidebar.write(f"- **{ev.get('tipo','?')}** — {ev.get('descricao','?')} ({ev.get('local','?')}) em {ts}")
 
@@ -215,51 +214,50 @@ st.session_state.enredo_inicial = st.text_area(
 cc1, cc2, cc3 = st.columns(3)
 with cc1:
     if st.button("🔄 Resetar histórico (chat)"):
-        limpar_memoria_usuario(USUARIO)
+        mu.limpar_memoria_usuario(USUARIO)
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.success(f"Histórico de {USUARIO} apagado (memórias canônicas preservadas).")
 
 with cc2:
     if st.button("🧠 Apagar TUDO (chat + memórias)"):
-        apagar_tudo_usuario(USUARIO)
+        mu.apagar_tudo_usuario(USUARIO)
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.success(f"Chat e memórias canônicas de {USUARIO} foram apagados.")
 
 with cc3:
     if st.button("⏪ Apagar último turno"):
-        from mongo_utils import apagar_ultima_interacao_usuario
-        apagar_ultima_interacao_usuario(USUARIO)
-        st.session_state.mary_log = montar_historico_openrouter(USUARIO)
+        mu.apagar_ultima_interacao_usuario(USUARIO)
+        st.session_state.mary_log = mu.montar_historico_openrouter(USUARIO)
         st.info("Última interação apagada.")
 
 # ===== Publica ENREDO se necessário =====
 if st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado:
-    if colecao.count_documents({
+    if mu.colecao.count_documents({
         "usuario": {"$regex": f"^{re.escape(USUARIO)}$", "$options": "i"},
         "mensagem_usuario": "__ENREDO_INICIAL__"
     }) == 0:
-        salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
+        mu.salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
         st.session_state.enredo_publicado = True
 
 # ===== Carrega histórico =====
-st.session_state.mary_log = montar_historico_openrouter(USUARIO)
+st.session_state.mary_log = mu.montar_historico_openrouter(USUARIO)
 
 # ===== Diagnóstico (opcional) =====
 with st.expander("🔍 Diagnóstico do banco"):
     try:
         from pymongo import DESCENDING
-        st.write(f"**DB**: `{db.name}`")
-        st.write(f"**Coleções**: {[c for c in db.list_collection_names()]}")
-        total_hist = colecao.count_documents({"usuario": {"$regex": f"^{re.escape(USUARIO)}$", "$options": "i"}})
-        total_state = state.count_documents({"usuario": USUARIO})
-        total_eventos = eventos.count_documents({"usuario": USUARIO})
-        total_perfil = perfil.count_documents({"usuario": USUARIO})
+        st.write(f"**DB**: `{mu.db.name}`")
+        st.write(f"**Coleções**: {[c for c in mu.db.list_collection_names()]}")
+        total_hist = mu.colecao.count_documents({"usuario": {"$regex": f"^{re.escape(USUARIO)}$", "$options": "i"}})
+        total_state = mu.state.count_documents({"usuario": USUARIO})
+        total_eventos = mu.eventos.count_documents({"usuario": USUARIO})
+        total_perfil = mu.perfil.count_documents({"usuario": USUARIO})
         st.write(f"Histórico (`mary_historia`): **{total_hist}**")
         st.write(f"Memória canônica — state: **{total_state}**, eventos: **{total_eventos}**, perfil: **{total_perfil}**")
         if total_hist:
-            ult = list(colecao.find({"usuario": {"$regex": f"^{re.escape(USUARIO)}$", "$options": "i"}}).sort([("_id", DESCENDING)]).limit(5))
+            ult = list(mu.colecao.find({"usuario": {"$regex": f"^{re.escape(USUARIO)}$", "$options": "i"}}).sort([("_id", DESCENDING)]).limit(5))
             st.write("Últimos 5 (histórico):")
             for d in ult:
                 st.code({
@@ -300,8 +298,8 @@ with chat:
 if prompt := st.chat_input("Envie sua mensagem para Mary"):
     with st.chat_message("user"):
         st.markdown(prompt)
-    resposta = gerar_resposta_openrouter(prompt, USUARIO, model=st.session_state.modelo_escolhido)
-    salvar_interacao(USUARIO, prompt, resposta)
-    st.session_state.mary_log = montar_historico_openrouter(USUARIO)
+    resposta = mu.gerar_resposta_openrouter(prompt, USUARIO, model=st.session_state.modelo_escolhido)
+    mu.salvar_interacao(USUARIO, prompt, resposta)
+    st.session_state.mary_log = mu.montar_historico_openrouter(USUARIO)
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(resposta)
