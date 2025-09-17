@@ -282,6 +282,78 @@ def _sanitize_locais_na_saida(usuario: str, resposta: str) -> str:
 
     return txt
 
+# --- Canon de locais e saneador de saída ---
+
+_CANON_EQUIVALENTES = {
+    "clube serra bella": {"serra bella", "serra bela", "clube serra bella", "balada", "clube"},
+    "café oregon": {"café oregon", "cafe oregon", "oregon", "cafeteria oregon"},
+    "praia de camburi": {"praia de camburi", "camburi", "posto 6", "quiosque posto 6"},
+    "motel status": {"motel status", "status"},
+    "ufes": {"ufes", "universidade federal do espírito santo"},
+}
+
+def _normtxt(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+def _local_preferido(usuario: str) -> str:
+    """Preferência de local da cena, se o usuário tiver setado manualmente; senão,
+    tenta último evento com local; caso contrário, vazio."""
+    # 1) fato manual opcional
+    from typing import Optional
+    try:
+        fatos = get_fatos(usuario)
+    except Exception:
+        fatos = {}
+    prefer = _normtxt(str(fatos.get("local_cena_atual", "")))
+    if prefer:
+        return prefer
+    # 2) último evento com local
+    try:
+        ult = eventos.find_one(
+            {"usuario": usuario, "local": {"$exists": True, "$ne": None}},
+            sort=[("ts", -1)]
+        )
+        if ult and ult.get("local"):
+            return _normtxt(ult["local"])
+    except Exception:
+        pass
+    return ""
+
+def _resolve_canon_local(nome_norm: str) -> str:
+    """Dado um nome normalizado, retorna a chave canônica se pertencer a algum conjunto."""
+    for canon, variantes in _CANON_EQUIVALENTES.items():
+        for v in variantes:
+            if v in nome_norm:
+                return canon
+    return ""
+
+def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
+    """Se existe um local canônico preferido na cena, substitui menções conflitantes na resposta."""
+    prefer = _local_preferido(usuario)  # ex.: "clube serra bella"
+    if not prefer:
+        return texto
+
+    prefer_canon = _resolve_canon_local(prefer) or prefer
+    if not prefer_canon:
+        return texto
+
+    # constrói um mapa {variante -> preferido} para todas as outras chaves
+    substituir: dict[str, str] = {}
+    for canon, variantes in _CANON_EQUIVALENTES.items():
+        if canon == prefer_canon:
+            continue
+        for v in variantes:
+            substituir[v] = prefer_canon
+
+    out = texto
+    # substituições simples (case-insensitive), preservando capitalização inicial
+    for v, alvo in substituir.items():
+        # três formatos comuns para preservar capitalização inicial
+        out = re.sub(rf"\b{re.escape(v)}\b", alvo, out, flags=re.IGNORECASE)
+        out = re.sub(rf"\b{re.escape(v.title())}\b", alvo.title(), out)
+        out = re.sub(rf"\b{re.escape(v.upper())}\b", alvo.upper(), out)
+    return out
+
 def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
     base = any([
         _RE_PROIBIDO_CABELO.search(txt),
