@@ -50,6 +50,21 @@ ATENÇÃO MÁXIMA — NUNCA QUEBRAR:
 2) Curso/Faculdade: Eu estudo Engenharia Civil na UFES. Nunca diga outro curso/faculdade.
 3) Mãe: O nome da minha mãe é Joselina (viva). Nunca diga outro nome nem que ela faleceu, sem evento explícito no histórico.
 
+LOCAIS CANÔNICOS (padronizados; use estes por padrão)
+- Balada: Clube Serra Bella
+- Café/Encontro: Café Oregon
+- Praia: Praia de Camburi (Quiosque Posto 6)
+- Motel (privacidade): Motel Status
+- Ousadia à noite: Enseada do Suá (trechos desertos)
+- Almoço: Restaurante Partido Alto (Camburi)
+- Academia (treinos): a mesma academia frequente com Silvia
+- Campus: UFES
+
+REGRAS DE LOCAL (OBRIGATÓRIAS)
+- Não invente nomes de baladas/botecos/bares que não estejam nos canônicos, a menos que o USUÁRIO introduza e salve como fato canônico (ex.: 'balada_preferida').
+- Se o usuário não definir nada, mapeie “balada/bar/festinha” para **Clube Serra Bella**; “barzinho” para **Café Oregon**.
+- Se o usuário introduzir um novo local (ex.: “BarzinDoZé”) sem salvar como canônico, **substitua por um local canônico equivalente** e explique brevemente a coerência.
+
 IDENTIDADE FIXA
 - Nome: Mary Massariol, 20 anos. Estudante de Engenharia Civil (UFES).
 - Mora com a mãe (Joselina), ap. 202 — Rua Beethoven, Laranjeiras. Usa moto 500cc.
@@ -57,26 +72,25 @@ IDENTIDADE FIXA
 
 FÍSICO / SENSORIAL
 - Use 1 traço sensorial por parágrafo, integrado à ação.
-- Traços disponíveis: cabelos NEGROS, volumosos e soltos; olhos verdes; seios médios; cintura definida; quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele dourada.
+- Traços: cabelos NEGROS, volumosos e soltos; olhos verdes; seios médios; cintura definida; quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele dourada.
 
 RELACIONAMENTO / LIMITES
 - Virgem por escolha; progressão: flerte → beijo → carícia → toque íntimo → sexo (sempre consentido).
 - Rejeita traição; entrega total apenas por vontade própria.
 
 TERCEIROS
-- Silvia Bodat (extrovertida) e Alexandra Resinentti (reservada) só aparecem como apoio (fofoca, conselhos) sem tirar foco do usuário.
+- Silvia Bodat (extrovertida) e Alexandra Resinentti (reservada) só como apoio (fofoca, conselhos), sem tirar foco do usuário.
 
 ESTILO
-- Produza de 3 a 5 parágrafos com 2 a 3 frases cada.
-- Expanda reações físicas, emoção e percepção sensorial; linguagem natural e direta.
-- Marcar passagem de tempo/contexto quando necessário (“mais tarde…”, “na praia…”).
-- Sem loops: efeitos e consequências persistem nas próximas interações.
+- 3–5 parágrafos; 2–3 frases cada; linguagem natural e direta.
+- Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “na praia…”).
+- Sem loops: efeitos e consequências persistem.
 
 REGRA DE CONSISTÊNCIA
 - Cabelo: “Meus cabelos são negros, volumosos e soltos.”
 - Estudo: “Eu estudo Engenharia Civil na UFES.”
 - Mãe: “O nome da minha mãe é Joselina.”
-- Se houver contradição, corrija explicitamente e reforce a forma correta.
+- Locais: use apenas os canônicos OU os salvos pelo usuário como fatos (ex.: 'balada_preferida').
 """.strip()
 
 HISTORY_BOOT = [
@@ -229,6 +243,44 @@ def registrar_evento_canonico(
 _RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
 _RE_PROIBIDO_CURSO = re.compile(r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|administraç\w*|econom\w*|sistemas?\b.*inform)\b", re.IGNORECASE)
 _RE_MAE_NAO_JOSELINA = re.compile(r"\bm[ãa]e\b(?![^\.]{0,60}\bJoselina\b)", re.IGNORECASE)
+# --- Allowlist de locais e mapeamentos ---
+_CANON_EQUIVALENTES = {
+    "balada": "Clube Serra Bella",
+    "bar": "Café Oregon",
+    "barzinho": "Café Oregon",
+    "festinha": "Clube Serra Bella",
+}
+# Se quiser bloquear nomes inventados, inclua termos típicos de “barxx/ pubyy”
+_RE_NOME_LOCAL_NOVO = re.compile(r"\b(bar\w+|pub\w+|lounge\w+|botec\w+)\b", re.IGNORECASE)
+
+def _local_preferido(usuario: str) -> str:
+    fatos = get_fatos(usuario)
+    return (fatos.get("balada_preferida") 
+            or fatos.get("bar_preferido")
+            or "")
+
+def _sanitize_locais_na_saida(usuario: str, resposta: str) -> str:
+    """
+    1) Se o texto mostra um 'bar/balada/festinha' genérico, substitui pelo canônico ou pelo salvo em fatos.
+    2) Se aparecer um 'barXYZ' inventado e NÃO existir fato canônico correspondente, troca por equivalente.
+    """
+    preferido = _local_preferido(usuario)  # ex.: "BarzinDoZé" salvo como fato
+    txt = resposta
+
+    # Caso apareça menção genérica
+    for gen, can in _CANON_EQUIVALENTES.items():
+        # exemplo simples; pode sofisticar com NLP mais tarde
+        if re.search(rf"\b{gen}\b", txt, flags=re.IGNORECASE):
+            alvo = preferido or can
+            txt = re.sub(rf"\b{gen}\b", alvo, txt, flags=re.IGNORECASE)
+
+    # Caso apareça “nome novo” e não exista preferido salvo
+    if not preferido and _RE_NOME_LOCAL_NOVO.search(txt):
+        # heurística: troque qualquer “barXxx” por Café Oregon; “lounge/pub” por Clube Serra Bella
+        txt = re.sub(r"\bbar\w+\b", "Café Oregon", txt, flags=re.IGNORECASE)
+        txt = re.sub(r"\b(pub\w+|lounge\w+)\b", "Clube Serra Bella", txt, flags=re.IGNORECASE)
+
+    return txt
 
 def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
     base = any([
@@ -252,13 +304,16 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENROUTER_TOKEN}", "Content-Type": "application/json"}
 
+    # Histórico recente (ou âncoras se vazio)
     hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
     if not hist:
         hist = HISTORY_BOOT[:]
 
+    # Memória canônica → system message
     memoria_txt = construir_contexto_memoria(usuario)
     memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA:\n" + memoria_txt}] if memoria_txt else []
 
+    # Mensagens
     messages = [
         {"role": "system", "content": PERSONA_MARY},
         {"role": "system", "content": "Estilo: 3–5 parágrafos; 2–3 frases por parágrafo; 1 traço sensorial por parágrafo."},
@@ -274,16 +329,30 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
         "frequency_penalty": 0.2
     }
 
+    # 1ª chamada
     r = requests.post(url, headers=headers, json=payload, timeout=120)
     r.raise_for_status()
     resposta = r.json()["choices"][0]["message"]["content"]
 
+    # Saneia locais inventados/substitui por canônicos (ou preferido salvo)
+    try:
+        resposta = _sanitize_locais_na_saida(usuario, resposta)
+    except NameError:
+        # Caso o helper ainda não esteja definido no arquivo
+        pass
+
+    # Retry com reforço de coerência/persona se necessário
     if _violou_mary(resposta, usuario):
         messages.insert(1, _reforco_system())
         payload["messages"] = messages
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
         r2.raise_for_status()
         resposta = r2.json()["choices"][0]["message"]["content"]
+        # Saneia novamente após retry
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except NameError:
+            pass
 
     return resposta
 
