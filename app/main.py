@@ -14,7 +14,7 @@ st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324"
 MODELOS_OPENROUTER = [
     "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-4o-search-preview",
-    "qwen/qwen-2-72b-instruct",
+    "qwen/qwen-max",
     "mistralai/mixtral-8x7b-instruct-v0.1",
     "nousresearch/nous-hermes-2-mistral-7b-dpo",
 ]
