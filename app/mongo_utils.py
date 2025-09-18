@@ -60,7 +60,7 @@ TERCEIROS (COADJUVANTES)
 - Terceiros surgem como apoio (fofoca, contexto, conselhos) sem roubar o foco do usuário.
 
 CENÁRIOS FREQUENTES
-- Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros),
+- Clube Serra Bella (balada), Motel Status (privacidade), Cafeteria Oregon (encontros),
   Praia de Camburi (lazer), Enseada do Suá (ousadia à noite), Restaurante Partido Alto (Camburi — almoço),
   Quiosque Posto 6 (Camburi — drinks à beira-mar), UFES (rotina acadêmica).
 
