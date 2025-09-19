@@ -1,3 +1,4 @@
+# mongo_utils.py
 import re
 import streamlit as st
 from pymongo import MongoClient
@@ -62,7 +63,9 @@ CENÁRIO / PAPÉIS PROIBIDOS (salvo se o usuário definir explicitamente)
 - Não adotar papéis de empregada/patroa/serviçal; evitar temas religiosos traumáticos (exorcismo, demônios, crucifixo).
 
 LOCAIS COMUNS (usar quando fizer sentido)
-- Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros), Praia de Camburi (lazer), Enseada do Suá (deserta para sexo ao anoitecer), Restaurante Partido Alto em camburi (Almoço), Quiosque Posto 6 em Camburi (Drinks a beira mar).
+- Clube Serra Bella (balada), Motel Status (privacidade), Café Oregon (encontros),
+  Praia de Camburi (lazer), Enseada do Suá (deserta para sexo ao anoitecer),
+  Restaurante Partido Alto (Camburi — almoço), Quiosque Posto 6 (Camburi — drinks à beira-mar).
 
 ESTILO — SAÍDA ESPERADA
 - Produza de 3 a 5 parágrafos por turno, com 2 a 3 frases por parágrafo, mantendo fluidez natural.
@@ -98,7 +101,10 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
     })
 
 def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
-    docs = list(colecao.find({"usuario": usuario}).sort([("_id", 1)]))
+    # case-insensitive por segurança (evita colisões de casing)
+    docs = list(
+        colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", 1)])
+    )
     messages_rev, total_tokens = [], 0
     for doc in reversed(docs):
         u = (doc.get("mensagem_usuario") or "")
@@ -109,6 +115,9 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
         messages_rev.append({"role": "assistant", "content": a})
         messages_rev.append({"role": "user", "content": u})
         total_tokens += tok
+
+    if not messages_rev:
+        return HISTORY_BOOT[:]  # injeta âncoras se ainda não há histórico
     return list(reversed(messages_rev))
 
 # ========== Memória canônica (fatos/eventos/resumo) ==========
@@ -118,6 +127,10 @@ def set_fato(usuario: str, chave: str, valor, meta=None):
         {"$set": {f"fatos.{chave}": valor, f"meta.{chave}": (meta or {}), "atualizado_em": datetime.utcnow()}},
         upsert=True
     )
+
+def get_fatos(usuario: str):
+    doc = state.find_one({"usuario": usuario}, {"fatos": 1})
+    return (doc or {}).get("fatos", {}) or {}
 
 def get_fato(usuario: str, chave: str, default=None):
     doc = state.find_one({"usuario": usuario}, {"fatos."+chave: 1})
@@ -139,28 +152,111 @@ def ultimo_evento(usuario: str, tipo: str):
 
 def get_resumo(usuario: str) -> str:
     doc = perfil.find_one({"usuario": usuario}, {"resumo": 1})
-    return (doc or {}).get("resumo", "")
+    return (doc or {}).get("resumo", "") or ""
 
 def construir_contexto_memoria(usuario: str) -> str:
+    """
+    Monta um bloco curto com fatos/eventos/linha do tempo que “ancoram” a coerência.
+    """
     linhas = []
-    virgem = get_fato(usuario, "virgem", None)
-    if virgem is not None:
-        linhas.append(f"STATUS ÍNTIMO: virgem={bool(virgem)}")
-    parceiro = get_fato(usuario, "parceiro_atual", None)
-    if parceiro:
-        linhas.append(f"RELACIONAMENTO: parceiro_atual={parceiro}")
-    cidade = get_fato(usuario, "cidade_atual", None)
-    if cidade:
-        linhas.append(f"LOCAL: cidade_atual={cidade}")
-    e_primeira = ultimo_evento(usuario, "primeira_vez")
-    if e_primeira:
-        dt = e_primeira["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = e_primeira.get("local") or "local não especificado"
+    fatos = get_fatos(usuario)
+
+    # Fatos frequentes
+    if "virgem" in fatos:
+        linhas.append(f"STATUS ÍNTIMO: virgem={bool(fatos['virgem'])}")
+    if "parceiro_atual" in fatos:
+        linhas.append(f"RELACIONAMENTO: parceiro_atual={fatos['parceiro_atual']}")
+    if "cidade_atual" in fatos:
+        linhas.append(f"LOCAL: cidade_atual={fatos['cidade_atual']}")
+    if "primeiro_encontro" in fatos:
+        linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
+
+    # Eventos canônicos comuns (agora incluem primeiro_encontro e ciume)
+    e_primeiro = ultimo_evento(usuario, "primeiro_encontro")
+    if e_primeiro:
+        dt = e_primeiro["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_primeiro.get("local") or "local não especificado"
+        linhas.append(f"EVENTO_CANÔNICO: primeiro_encontro em {dt} @ {lugar}")
+
+    e_primeira_vez = ultimo_evento(usuario, "primeira_vez")
+    if e_primeira_vez:
+        dt = e_primeira_vez["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_primeira_vez.get("local") or "local não especificado"
         linhas.append(f"EVENTO_CANÔNICO: primeira_vez em {dt} @ {lugar}")
+
+    e_ciume = ultimo_evento(usuario, "episodio_ciume_praia")
+    if e_ciume:
+        dt = e_ciume["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_ciume.get("local") or "Praia"
+        linhas.append(f"ÚLTIMO_EVENTO_CIUME: {dt} @ {lugar} — surfista tentou flertar; Janio interveio.")
+
+    # Resumo curto
     resumo = get_resumo(usuario)
     if resumo:
         linhas.append(f"RESUMO: {resumo[:600]}")
-    return "\n".join(linhas)
+
+    return "\n".join(linhas).strip()
+
+# ========== Locais canônicos: normalização/saneamento ==========
+_CANON_EQUIVALENTES = {
+    "clube serra bella": {"serra bella", "serra bela", "clube serra bella", "balada", "clube"},
+    "café oregon": {"café oregon", "cafe oregon", "oregon", "cafeteria oregon"},
+    "praia de camburi": {"praia de camburi", "camburi", "posto 6", "quiosque posto 6"},
+    "motel status": {"motel status", "status"},
+    "enseada do suá": {"enseada do suá", "enseada"},
+    "restaurante partido alto": {"partido alto", "restaurante partido alto"},
+}
+
+def _normtxt(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+def _resolve_canon_local(nome_norm: str) -> str:
+    for canon, variantes in _CANON_EQUIVALENTES.items():
+        for v in variantes:
+            if v in nome_norm:
+                return canon
+    return ""
+
+def _local_preferido(usuario: str) -> str:
+    # 1) fato manual de preferência de cena
+    fatos = get_fatos(usuario)
+    prefer = _normtxt(str(fatos.get("local_cena_atual", "")))
+    if prefer:
+        return prefer
+    # 2) último evento com local
+    ult = eventos.find_one(
+        {"usuario": usuario, "local": {"$exists": True, "$ne": None}},
+        sort=[("ts", -1)]
+    )
+    if ult and ult.get("local"):
+        return _normtxt(ult["local"])
+    return ""
+
+def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
+    """
+    Se existe um local preferido/canônico na cena, substitui menções conflitantes na resposta.
+    """
+    prefer = _local_preferido(usuario)
+    if not prefer:
+        return texto
+
+    prefer_canon = _resolve_canon_local(prefer) or prefer
+    if not prefer_canon:
+        return texto
+
+    substituir = {}
+    for canon, variantes in _CANON_EQUIVALENTES.items():
+        if canon == prefer_canon:
+            continue
+        for v in variantes:
+            substituir[v] = prefer_canon
+
+    out = texto
+    for v, alvo in substituir.items():
+        out = re.sub(rf"\b{re.escape(v)}\b", alvo, out, flags=re.IGNORECASE)
+        out = re.sub(rf"\b{re.escape(v.title())}\b", alvo.title(), out)
+        out = re.sub(rf"\b{re.escape(v.upper())}\b", alvo.upper(), out)
+    return out
 
 # ========== Validadores (anti-violação) ==========
 _RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
@@ -198,7 +294,8 @@ def _reforco_system():
             "- Cabelo: 'Meus cabelos são negros, volumosos e soltos.' Nunca outra cor.\n"
             "- Curso/Faculdade: 'Eu estudo Engenharia Civil na UFES.' Nunca outro curso/faculdade.\n"
             "- Mãe: 'O nome da minha mãe é Joselina.' Nunca outro nome nem tragédias religiosas associadas.\n"
-            "- Papel/Cenário: não usar papéis de empregada/patroa/serviço doméstico salvo se o usuário definir explicitamente."
+            "- Papel/Cenário: não usar papéis de empregada/patroa/serviço doméstico salvo se o usuário definir explicitamente.\n"
+            "- Respeite locais/eventos canônicos e não invente locais se houver preferido salvo."
         )
     }
 
@@ -236,6 +333,12 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "d
     r.raise_for_status()
     resposta = r.json()["choices"][0]["message"]["content"]
 
+    # Saneia locais (evita misturar Oregon/Serra Bella/Status etc.)
+    try:
+        resposta = _sanitize_locais_na_saida(usuario, resposta)
+    except Exception:
+        pass
+
     # Retry se violar
     if _violou_mary(resposta, usuario):
         messages.insert(1, _reforco_system())
@@ -243,14 +346,17 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "d
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
         r2.raise_for_status()
         resposta = r2.json()["choices"][0]["message"]["content"]
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except Exception:
+            pass
 
     return resposta
 
 # ========== Utilidades ==========
-
 def limpar_memoria_usuario(usuario: str):
     """Apaga apenas o histórico de chat (interações)."""
-    colecao.delete_many({"usuario": usuario})
+    colecao.delete_many({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
 def limpar_memoria_canonica(usuario: str):
     """Apaga apenas as memórias canônicas (fatos, eventos, resumo)."""
@@ -265,8 +371,9 @@ def apagar_tudo_usuario(usuario: str):
 
 def apagar_ultima_interacao_usuario(usuario: str):
     """Remove as duas últimas entradas (user + assistant), se existirem."""
-    docs = list(colecao.find({"usuario": usuario}).sort([('_id', -1)]).limit(2))
-    if docs:
-        for doc in docs:
-            colecao.delete_one({'_id': doc['_id']})
-
+    docs = list(
+        colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
+        .sort([('_id', -1)]).limit(2)
+    )
+    for doc in docs:
+        colecao.delete_one({'_id': doc['_id']})
