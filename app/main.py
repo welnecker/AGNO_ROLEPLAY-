@@ -9,74 +9,35 @@ import mongo_utils as mu
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
 
-# -------------------------------
-# Seletor de PROVEDOR e MODELO
-# -------------------------------
-PROVEDORES = ["OpenRouter", "Together", "HuggingFace"]
-
-# catálogos base de modelos por provedor (ajuste conforme seus planos e chaves)
-MODELOS_POR_PROVEDOR = {
-    "OpenRouter": [
-        "deepseek/deepseek-chat-v3-0324",
-        "openai/gpt-4o-search-preview",
-        "qwen/qwen-max",
-        "mistralai/mixtral-8x7b-instruct-v0.1",
-        "nousresearch/nous-hermes-2-mistral-7b-dpo",
-    ],
-    # nomes de modelos no Together (exemplos populares)
-    "Together": [
-        "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
-        "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "Qwen/Qwen2-72B-Instruct",
-        "google/gemma-2-27b-it",
-    ],
-    # nomes de modelos no HF Inference (text_generation)
-    "HuggingFace": [
-        "mistralai/Mistral-7B-Instruct-v0.3",
-        "meta-llama/Llama-3.1-8B-Instruct",
-        "Qwen/Qwen2.5-7B-Instruct",
-        "tiiuae/falcon-7b-instruct",
-    ],
-}
-
-st.session_state.setdefault("provedor_escolhido", "OpenRouter")
-st.session_state.setdefault("modelo_escolhido", MODELOS_POR_PROVEDOR["OpenRouter"][0])
-
-cprov, cmodel = st.columns([1, 3])
-with cprov:
-    st.session_state.provedor_escolhido = st.selectbox(
-        "🔌 Provedor",
-        PROVEDORES,
-        index=PROVEDORES.index(st.session_state.provedor_escolhido)
-        if st.session_state.provedor_escolhido in PROVEDORES else 0
-    )
-
-# se trocar provedor, reset sugerido para primeiro modelo do catálogo
-modelos_atual = MODELOS_POR_PROVEDOR.get(st.session_state.provedor_escolhido, [])
-if st.session_state.modelo_escolhido not in modelos_atual:
-    st.session_state.modelo_escolhido = (modelos_atual[0] if modelos_atual else "")
-
-with cmodel:
+# ==== Seletor de modelo ====
+st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324")
+MODELOS_OPENROUTER = [
+    "deepseek/deepseek-chat-v3-0324",
+    "openai/gpt-4o-search-preview",
+    "qwen/qwen-max",
+    "anthracite-org/magnum-v2-72b",
+    "qwen/qwen-vl-max",
+]
+colm1, colm2 = st.columns([4, 1])
+with colm1:
     st.session_state.modelo_escolhido = st.selectbox(
-        "🧠 Modelo",
-        modelos_atual,
-        index=modelos_atual.index(st.session_state.modelo_escolhido)
-        if st.session_state.modelo_escolhido in modelos_atual else 0
+        "🧠 Modelo OpenRouter",
+        MODELOS_OPENROUTER,
+        index=MODELOS_OPENROUTER.index(st.session_state.modelo_escolhido)
+        if st.session_state.modelo_escolhido in MODELOS_OPENROUTER else 0
+    )
+with colm2:
+    st.markdown(
+        f"""
+        <div style="background-color:#222;color:#eee;padding:6px 10px;border-radius:8px;
+                    font-size:12px;text-align:center;margin-top:24px;opacity:.8">
+            <b>{st.session_state.modelo_escolhido}</b>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-st.markdown(
-    f"""
-    <div style="background-color:#222;color:#eee;padding:6px 10px;border-radius:8px;
-                font-size:12px;text-align:center;margin-top:6px;opacity:.8">
-        <b>{st.session_state.provedor_escolhido} · {st.session_state.modelo_escolhido}</b>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-# -------------------------------
-# Sidebar (logo/ilustração)
-# -------------------------------
+# ==== Sidebar (logo/ilustração) ====
 st.sidebar.title("Mary Massariol")
 st.sidebar.caption("Roleplay imersivo")
 
@@ -112,9 +73,7 @@ st.session_state.sidebar_credito = st.sidebar.text_input(
 if img_shown and st.session_state.sidebar_credito.strip():
     st.sidebar.caption(st.session_state.sidebar_credito.strip())
 
-# -------------------------------
-# Memória Canônica (manual)
-# -------------------------------
+# ==== Memória Canônica (manual) ====
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Memória Canônica (manual)")
 
@@ -225,9 +184,7 @@ for ev in list(mu.eventos.find({"usuario": st.session_state.get("usuario_fixado"
     ts = ev.get("ts").strftime("%Y-%m-%d %H:%M") if ev.get("ts") else "sem data"
     st.sidebar.write(f"- **{ev.get('tipo','?')}** — {ev.get('descricao','?')} ({ev.get('local','?')}) em {ts}")
 
-# -------------------------------
-# Campos fixos do topo
-# -------------------------------
+# ===== Campos fixos do topo =====
 st.session_state.setdefault("usuario_input", "welnecker")
 st.session_state.setdefault("usuario_fixado", None)
 st.session_state.setdefault("enredo_inicial", "")
@@ -253,9 +210,7 @@ st.session_state.enredo_inicial = st.text_area(
     height=80
 )
 
-# -------------------------------
-# Controles de memória do chat
-# -------------------------------
+# ===== Controles de memória do chat =====
 cc1, cc2, cc3 = st.columns(3)
 with cc1:
     if st.button("🔄 Resetar histórico (chat)"):
@@ -277,9 +232,7 @@ with cc3:
         st.session_state.mary_log = mu.montar_historico_openrouter(USUARIO)
         st.info("Última interação apagada.")
 
-# -------------------------------
-# Publica ENREDO se necessário
-# -------------------------------
+# ===== Publica ENREDO se necessário =====
 if st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado:
     if mu.colecao.count_documents({
         "usuario": {"$regex": f"^{re.escape(USUARIO)}$", "$options": "i"},
@@ -288,14 +241,10 @@ if st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publi
         mu.salvar_interacao(USUARIO, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
         st.session_state.enredo_publicado = True
 
-# -------------------------------
-# Carrega histórico
-# -------------------------------
+# ===== Carrega histórico =====
 st.session_state.mary_log = mu.montar_historico_openrouter(USUARIO)
 
-# -------------------------------
-# Diagnóstico (opcional)
-# -------------------------------
+# ===== Diagnóstico (opcional) =====
 with st.expander("🔍 Diagnóstico do banco"):
     try:
         from pymongo import DESCENDING
@@ -321,9 +270,7 @@ with st.expander("🔍 Diagnóstico do banco"):
     except Exception as e:
         st.error(f"Falha no diagnóstico: {e}")
 
-# -------------------------------
-# Chat (render)
-# -------------------------------
+# ===== Chat (render) =====
 chat = st.container()
 with chat:
     i = 0
@@ -347,31 +294,12 @@ with chat:
                 st.markdown(msg["content"])
         i += 1
 
-# -------------------------------
-# Input fixo no rodapé
-# -------------------------------
+# ===== Input fixo no rodapé =====
 if prompt := st.chat_input("Envie sua mensagem para Mary"):
     with st.chat_message("user"):
         st.markdown(prompt)
-
-    # Chama o gerador genérico com provedor e modelo selecionados
-    try:
-        resposta = mu.gerar_resposta_mary(
-            prompt_usuario=prompt,
-            usuario=USUARIO,
-            provedor=st.session_state.provedor_escolhido,
-            model=st.session_state.modelo_escolhido
-        )
-    except Exception as e:
-        st.error(f"Falha ao gerar resposta ({st.session_state.provedor_escolhido}): {e}")
-        resposta = "Desculpa, tive um problema para responder agora. Pode tentar de novo?"
-
-    # Persiste e re-renderiza
-    try:
-        mu.salvar_interacao(USUARIO, prompt, resposta, modelo=f"{st.session_state.provedor_escolhido}:{st.session_state.modelo_escolhido}")
-    except Exception as e:
-        st.warning(f"Não consegui salvar a interação: {e}")
-
+    resposta = mu.gerar_resposta_openrouter(prompt, USUARIO, model=st.session_state.modelo_escolhido)
+    mu.salvar_interacao(USUARIO, prompt, resposta)
     st.session_state.mary_log = mu.montar_historico_openrouter(USUARIO)
     with st.chat_message("assistant", avatar="💚"):
         st.markdown(resposta)
