@@ -73,19 +73,21 @@ ESTILO (ROMÂNTICO DIRETO — SEM METÁFORAS ACADÊMICAS)
 - Sem loops: efeitos e consequências persistem nas próximas interações.
 
 CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
-- Aparência/cabelo: “Meus cabelos são negros, volumosos e soltos.”
+- Aparência/cabelo: “Meus cabelos são negros e volumosos.”
 - Estudo: “Eu estudo Engenharia Civil na UFES.”
 - Mãe: “O nome da minha mãe é Joselina.”
 - Se houver contradição no histórico, corrija explicitamente e siga as regras fixas acima.
 """.strip()
 
 HISTORY_BOOT = [
-    {"role": "assistant", "content": "Meus cabelos são negros, volumosos e soltos."},
+    {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
     {"role": "assistant", "content": "Eu estudo Engenharia Civil na UFES."},
     {"role": "assistant", "content": "Moro com minha mãe, Joselina, no ap. 202 da Rua Beethoven, em Laranjeiras."},
 ]
 
-# ========== Histórico ==========
+# ============================
+# Histórico (persistência)
+# ============================
 def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, modelo: str = "deepseek/deepseek-chat-v3-0324"):
     colecao.insert_one({
         "usuario": usuario,
@@ -99,8 +101,7 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> Li
     docs = list(
         colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", 1)])
     )
-    messages_rev: List[Dict[str, str]] = []
-    total_tokens = 0
+    messages_rev, total_tokens = [], 0
     for doc in reversed(docs):
         u = doc.get("mensagem_usuario") or ""
         a = doc.get("resposta_mary") or ""
@@ -114,7 +115,9 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> Li
         return HISTORY_BOOT[:]
     return list(reversed(messages_rev))
 
-# ========== Memória canônica ==========
+# ============================
+# Memória canônica (CRUD)
+# ============================
 def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
     state.update_one(
         {"usuario": usuario},
@@ -149,122 +152,193 @@ def registrar_evento(usuario: str, tipo: str, descricao: str,
         "ts": data_hora or datetime.utcnow()
     })
 
+# ---------- Regras evento -> fatos (ATUALIZADA) ----------
+def _aplicar_regras_evento_para_fatos(
+    usuario: str,
+    tipo: str,
+    descricao: str,
+    local: Optional[str],
+    ts: datetime
+):
+    """
+    Regras de sincronização evento -> fatos canônicos.
+    Detecta:
+    - 'primeiro_encontro' ou texto contendo 'se conheceram' => primeiro_encontro = local do evento
+    - 'forró'/'forro'/'posto 6' na descrição => forro_local = 'Quiosque Posto 6'
+    - demais (primeira_vez, episodio_ciume_praia, pedido_namoro)
+    """
+    t = (tipo or "").strip().lower()
+    desc_norm = (descricao or "").lower()
+
+    # 1) Primeiro encontro
+    if t == "primeiro_encontro" or ("se conheceram" in desc_norm):
+        if local:
+            set_fato(usuario, "primeiro_encontro", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "primeiro_encontro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    # 2) Primeira vez (sexual)
+    if t == "primeira_vez":
+        set_fato(usuario, "virgem", False, meta={"fonte": "evento", "ts": ts})
+        if local:
+            set_fato(usuario, "primeira_vez_local", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "primeira_vez_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    # 3) Episódio de ciúme na praia
+    if t == "episodio_ciume_praia":
+        if local:
+            set_fato(usuario, "episodio_ciume_local", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "episodio_ciume_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    # 4) Pedido de namoro
+    if t == "pedido_namoro":
+        set_fato(usuario, "relacionamento_status", "namorando", meta={"fonte": "evento", "ts": ts})
+        if local:
+            set_fato(usuario, "pedido_namoro_local", local, meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "pedido_namoro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+    # 5) Heurística: forró + Posto 6
+    if ("forró" in desc_norm) or ("forro" in desc_norm) or ("posto 6" in desc_norm):
+        set_fato(usuario, "forro_local", "Quiosque Posto 6", meta={"fonte": "evento", "ts": ts})
+        set_fato(usuario, "forro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
+
+def registrar_evento_canonico(
+    usuario: str,
+    tipo: str,
+    descricao: str,
+    local: Optional[str] = None,
+    data_hora: Optional[datetime] = None,
+    atualizar_fatos: bool = True,
+):
+    """Wrapper: registra o evento e, opcionalmente, sincroniza fatos canônicos."""
+    ts = data_hora or datetime.utcnow()
+    eventos.insert_one({
+        "usuario": usuario,
+        "tipo": tipo,
+        "descricao": descricao,
+        "local": local,
+        "ts": ts
+    })
+    if atualizar_fatos:
+        _aplicar_regras_evento_para_fatos(usuario, tipo, descricao, local, ts)
+
+# ---------- Bloco de memória injetado ----------
 def construir_contexto_memoria(usuario: str) -> str:
     linhas: List[str] = []
     fatos = get_fatos(usuario)
+
     if "virgem" in fatos:
         linhas.append(f"STATUS ÍNTIMO: virgem={bool(fatos['virgem'])}")
     if "parceiro_atual" in fatos:
         linhas.append(f"RELACIONAMENTO: parceiro_atual={fatos['parceiro_atual']}")
+    if "relacionamento_status" in fatos:
+        linhas.append(f"RELACIONAMENTO_STATUS: {fatos['relacionamento_status']}")
     if "cidade_atual" in fatos:
         linhas.append(f"LOCAL: cidade_atual={fatos['cidade_atual']}")
+
+    # >>> Locais canônicos distintos
     if "primeiro_encontro" in fatos:
         linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
+    if "forro_local" in fatos:
+        linhas.append(f"FORRÓ: local={fatos['forro_local']}")
 
-    ev_prim = ultimo_evento(usuario, "primeira_vez")
-    if ev_prim:
-        dt = ev_prim["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = ev_prim.get("local") or "local não especificado"
+    # Eventos úteis
+    e_primeira = ultimo_evento(usuario, "primeira_vez")
+    if e_primeira:
+        dt = e_primeira["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_primeira.get("local") or "local não especificado"
         linhas.append(f"EVENTO_CANÔNICO: primeira_vez em {dt} @ {lugar}")
-
-    ev_ciume = ultimo_evento(usuario, "episodio_ciume_praia")
-    if ev_ciume:
-        dt = ev_ciume["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = ev_ciume.get("local") or "Praia"
-        linhas.append(f"ÚLTIMO_EVENTO_CIUME: {dt} @ {lugar} — surfista tentou flertar; Janio interveio.")
 
     resumo = get_resumo(usuario)
     if resumo:
-        linhas.append(f"RESUMO: {resumo[:500]}")
+        linhas.append(f"RESUMO: {resumo[:600]}")
+
     return "\n".join(linhas).strip()
 
-# ========== Validadores básicos ==========
+# ============================
+# Sanitização de locais (ATUALIZADA)
+# ============================
+_CANON_SETS = {
+    "clube serra bella": {"serra bella", "serra bela", "clube serra bella"},
+    "café oregon": {"café oregon", "cafe oregon", "oregon"},
+    "praia de camburi": {"praia de camburi", "camburi", "quiosque posto 6", "posto 6"},
+    "motel status": {"motel status", "status"},
+    "ufes": {"ufes", "universidade federal do espírito santo"},
+}
+
+_GENERIC_TO_CANON = {
+    r"\bbalada\b": "clube serra bella",
+    r"\bbarzinho\b": "café oregon",
+    r"\bbar\b": "café oregon",
+    r"\bquiosque\b": "praia de camburi",
+}
+
+def _norm(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+def _is_known_canon(token: str) -> Optional[str]:
+    t = _norm(token)
+    for canon, variants in _CANON_SETS.items():
+        if t == canon or any(t == _norm(v) for v in variants):
+            return canon
+    return None
+
+def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
+    """
+    Corrige apenas termos genéricos/inventados.
+    NÃO substitui locais canônicos distintos (ex.: 'Café Oregon' e 'Posto 6' podem coexistir).
+    """
+    out = texto
+
+    # 1) Genéricos -> canônicos
+    for pat, canon in _GENERIC_TO_CANON.items():
+        out = re.sub(pat, canon, out, flags=re.IGNORECASE)
+
+    # 2) Inventados comuns (barX, pubY, loungeZ) – sem tocar canônicos já corretos
+    out = re.sub(
+        r"\bbar\w+\b",
+        lambda m: "café oregon" if not _is_known_canon(m.group(0)) else m.group(0),
+        out,
+        flags=re.IGNORECASE
+    )
+    out = re.sub(
+        r"\bpub\w+\b",
+        lambda m: "clube serra bella" if not _is_known_canon(m.group(0)) else m.group(0),
+        out,
+        flags=re.IGNORECASE
+    )
+    out = re.sub(
+        r"\blounge\w*\b",
+        lambda m: "clube serra bella" if not _is_known_canon(m.group(0)) else m.group(0),
+        out,
+        flags=re.IGNORECASE
+    )
+
+    return out
+
+# ============================
+# Validadores mínimos
+# ============================
 _RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
 _RE_PROIBIDO_CURSO = re.compile(r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|administraç\w*|econom\w*|sistemas?\b.*inform)\b", re.IGNORECASE)
 _RE_MAE_NAO_JOSELINA = re.compile(r"\bm[ãa]e\b(?![^\.]{0,60}\bJoselina\b)", re.IGNORECASE)
 
 def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
-    return any([
+    base = any([
         _RE_PROIBIDO_CABELO.search(txt),
         _RE_PROIBIDO_CURSO.search(txt),
         _RE_MAE_NAO_JOSELINA.search(txt),
     ])
+    return base
 
 def _reforco_system() -> Dict[str, str]:
     return {
         "role": "system",
-        "content": (
-            "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:\n"
-            "- Cabelo: 'Meus cabelos são negros, volumosos e soltos.' Nunca outra cor.\n"
-            "- Curso/Faculdade: 'Eu estudo Engenharia Civil na UFES.' Nunca outro curso/faculdade.\n"
-            "- Mãe: 'O nome da minha mãe é Joselina.' Nunca outro nome.\n"
-            "- Evite metáforas de cursos/ciência; mantenha romantismo direto."
-        )
+        "content": "CORREÇÃO: respeite cabelo, curso, mãe, e locais/eventos canônicos conforme memória salva. Evite metáforas acadêmicas."
     }
 
-# --- Canon de locais e saneador de saída ---
-_CANON_EQUIVALENTES = {
-    "clube serra bella": {"serra bella", "serra bela", "clube serra bella", "balada", "clube"},
-    "café oregon": {"café oregon", "cafe oregon", "oregon", "cafeteria oregon"},
-    "praia de camburi": {"praia de camburi", "camburi", "posto 6", "quiosque posto 6"},
-    "motel status": {"motel status", "status"},
-    "ufes": {"ufes", "universidade federal do espírito santo"},
-}
-
-def _normtxt(s: str) -> str:
-    return " ".join((s or "").lower().strip().split())
-
-def _local_preferido(usuario: str) -> str:
-    # 1) fato manual opcional
-    try:
-        fatos = get_fatos(usuario)
-    except Exception:
-        fatos = {}
-    prefer = _normtxt(str(fatos.get("local_cena_atual", "")))
-    if prefer:
-        return prefer
-    # 2) último evento com local
-    try:
-        ult = eventos.find_one(
-            {"usuario": usuario, "local": {"$exists": True, "$ne": None}},
-            sort=[("ts", -1)]
-        )
-        if ult and ult.get("local"):
-            return _normtxt(ult["local"])
-    except Exception:
-        pass
-    return ""
-
-def _resolve_canon_local(nome_norm: str) -> str:
-    for canon, variantes in _CANON_EQUIVALENTES.items():
-        for v in variantes:
-            if v in nome_norm:
-                return canon
-    return ""
-
-def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
-    prefer = _local_preferido(usuario)  # e.g., "clube serra bella"
-    if not prefer:
-        return texto
-    prefer_canon = _resolve_canon_local(prefer) or prefer
-    if not prefer_canon:
-        return texto
-
-    substituir: Dict[str, str] = {}
-    for canon, variantes in _CANON_EQUIVALENTES.items():
-        if canon == prefer_canon:
-            continue
-        for v in variantes:
-            substituir[v] = prefer_canon
-
-    out = texto
-    for v, alvo in substituir.items():
-        out = re.sub(rf"\b{re.escape(v)}\b", alvo, out, flags=re.IGNORECASE)
-        out = re.sub(rf"\b{re.escape(v.title())}\b", alvo.title(), out)
-        out = re.sub(rf"\b{re.escape(v.upper())}\b", alvo.upper(), out)
-    return out
-
-# ========== Geração com OpenRouter ==========
+# ============================
+# Geração com OpenRouter (usa saneador)
+# ============================
 def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
                               model: str = "deepseek/deepseek-chat-v3-0324",
                               limite_tokens_hist: int = 120000) -> str:
@@ -281,15 +355,14 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
     memoria_txt = construir_contexto_memoria(usuario)
     memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA:\n" + memoria_txt}] if memoria_txt else []
 
-    # Mensagens (com comportamento ativo e romantismo direto)
+    # Mensagens (com orientação de estilo e iniciativa)
     messages = [
         {"role": "system", "content": PERSONA_MARY},
         {"role": "system", "content": (
             "Estilo narrativo obrigatório:\n"
-            "- 3 a 5 parágrafos curtos, 2 a 3 frases cada.\n"
-            "- Um traço sensorial por parágrafo.\n"
-            "- Mary é ativa: pode propor encontros, ligar, mandar mensagem, marcar lugares ousados (com consentimento).\n"
-            "- Romântica e direta: use palavras simples de afeto/desejo; evite metáforas técnicas/estudantis."
+            "- 3 a 5 parágrafos, 2–3 frases cada; um traço sensorial por parágrafo.\n"
+            "- Mary é ativa: pode propor próximos passos (consentidos) e convites claros quando couber.\n"
+            "- Romântica e direta; não use metáforas de cursos/ciência/matemática."
         )},
     ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
@@ -308,21 +381,29 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str,
     r.raise_for_status()
     resposta = r.json()["choices"][0]["message"]["content"]
 
-    # Saneia locais inventados/substitui por canônicos (ou preferido salvo)
-    resposta = _sanitize_locais_na_saida(usuario, resposta)
+    # Saneia locais genéricos/inventados sem unificar canônicos distintos
+    try:
+        resposta = _sanitize_locais_na_saida(usuario, resposta)
+    except Exception:
+        pass
 
-    # Retry com reforço de coerência/persona se necessário
+    # Retry com reforço se violar coerência/persona
     if _violou_mary(resposta, usuario):
         messages.insert(1, _reforco_system())
         payload["messages"] = messages
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
         r2.raise_for_status()
         resposta = r2.json()["choices"][0]["message"]["content"]
-        resposta = _sanitize_locais_na_saida(usuario, resposta)
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except Exception:
+            pass
 
     return resposta
 
-# ========== Utilidades ==========
+# ============================
+# Utilidades (limpeza)
+# ============================
 def limpar_memoria_usuario(usuario: str):
     colecao.delete_many({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
@@ -336,9 +417,6 @@ def apagar_tudo_usuario(usuario: str):
     limpar_memoria_canonica(usuario)
 
 def apagar_ultima_interacao_usuario(usuario: str):
-    docs = list(
-        colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
-        .sort([('_id', -1)]).limit(2)
-    )
+    docs = list(colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([('_id', -1)]).limit(2))
     for d in docs:
         colecao.delete_one({'_id': d['_id']})
