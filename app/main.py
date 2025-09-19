@@ -25,7 +25,7 @@ MODELOS_POR_PROVEDOR = {
     ],
     # nomes de modelos no Together (exemplos populares)
     "Together": [
-        "meta-llama/Llama-3-70b-chat-hf",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
         "mistralai/Mixtral-8x7B-Instruct-v0.1",
         "Qwen/Qwen2-72B-Instruct",
         "google/gemma-2-27b-it",
