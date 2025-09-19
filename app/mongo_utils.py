@@ -11,19 +11,9 @@ from typing import Optional, Dict, Any, List
 import tiktoken
 import requests
 
-# Provedores opcionais (podem não estar instalados em dev local)
-try:
-    from together import Together
-except Exception:
-    Together = None
-
-try:
-    from huggingface_hub import InferenceClient
-except Exception:
-    InferenceClient = None
-
-
-# ========== Mongo ==========
+# =========================
+# Mongo (conexão e coleções)
+# =========================
 mongo_user = st.secrets["MONGO_USER"]
 mongo_pass = quote_plus(st.secrets["MONGO_PASS"])
 mongo_cluster = st.secrets["MONGO_CLUSTER"]
@@ -34,14 +24,17 @@ MONGO_URI = (
 client = MongoClient(MONGO_URI)
 db = client["AgnoRoleplay"]
 
-# Coleções
-colecao = db["mary_historia"]       # histórico de chat
-state   = db["mary_state"]          # fatos atuais (um doc por usuário)
-eventos = db["mary_eventos"]        # linha do tempo (vários docs por usuário)
-perfil  = db["mary_perfil"]         # resumo/sinopse (um doc por usuário)
+# Histórico de chat
+colecao = db["mary_historia"]
 
+# Memória canônica
+state = db["mary_state"]       # fatos (um doc por usuário)
+eventos = db["mary_eventos"]   # linha do tempo (vários docs por usuário)
+perfil  = db["mary_perfil"]    # resumo/sinopse (um doc por usuário)
 
-# ========== Tokenizer ==========
+# ==========
+# Tokenizer
+# ==========
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 
@@ -102,7 +95,9 @@ HISTORY_BOOT = [
     {"role": "assistant", "content": "Moro com minha mãe, Joselina, no ap. 202 da Rua Beethoven, em Laranjeiras."},
 ]
 
-# ========== Histórico ==========
+# =========================
+# Persistência do histórico
+# =========================
 def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, modelo: str = "deepseek/deepseek-chat-v3-0324"):
     colecao.insert_one({
         "usuario": usuario,
@@ -111,7 +106,6 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "modelo": modelo,
         "timestamp": datetime.now().isoformat()
     })
-
 
 def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> List[Dict[str, str]]:
     docs = list(
@@ -131,15 +125,16 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> Li
         return HISTORY_BOOT[:]
     return list(reversed(messages_rev))
 
-
-# ========== Memória canônica ==========
+# ======================
+# Memória canônica (CRUD)
+# ======================
 def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
     state.update_one(
         {"usuario": usuario},
         {
             "$set": {
                 f"fatos.{chave}": valor,
-                f"meta.{chave}": (meta or {"fonte": "manual"}),
+                f"meta.{chave}": (meta or {"fonte": "evento"}),
                 "atualizado_em": datetime.utcnow(),
             }
         },
@@ -167,39 +162,6 @@ def registrar_evento(usuario: str, tipo: str, descricao: str,
         "ts": data_hora or datetime.utcnow()
     })
 
-def construir_contexto_memoria(usuario: str) -> str:
-    linhas: List[str] = []
-    fatos = get_fatos(usuario)
-    if "virgem" in fatos:
-        linhas.append(f"STATUS ÍNTIMO: virgem={bool(fatos['virgem'])}")
-    if "parceiro_atual" in fatos:
-        linhas.append(f"RELACIONAMENTO: parceiro_atual={fatos['parceiro_atual']}")
-    if "relacionamento_status" in fatos:
-        linhas.append(f"RELACIONAMENTO_STATUS: {fatos['relacionamento_status']}")
-    if "cidade_atual" in fatos:
-        linhas.append(f"LOCAL: cidade_atual={fatos['cidade_atual']}")
-    if "primeiro_encontro" in fatos:
-        linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
-
-    ev_prim = ultimo_evento(usuario, "primeira_vez")
-    if ev_prim:
-        dt = ev_prim["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = ev_prim.get("local") or "local não especificado"
-        linhas.append(f"EVENTO_CANÔNICO: primeira_vez em {dt} @ {lugar}")
-
-    ev_ciume = ultimo_evento(usuario, "episodio_ciume_praia")
-    if ev_ciume:
-        dt = ev_ciume["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = ev_ciume.get("local") or "Praia"
-        linhas.append(f"ÚLTIMO_EVENTO_CIUME: {dt} @ {lugar} — surfista tentou flertar; Janio interveio.")
-
-    resumo = get_resumo(usuario)
-    if resumo:
-        linhas.append(f"RESUMO: {resumo[:500]}")
-    return "\n".join(linhas).strip()
-
-
-# ========== Regras evento → fatos ==========
 def _aplicar_regras_evento_para_fatos(
     usuario: str,
     tipo: str,
@@ -208,29 +170,24 @@ def _aplicar_regras_evento_para_fatos(
     ts: datetime
 ):
     t = (tipo or "").strip().lower()
-
     if t == "primeiro_encontro":
         if local:
             set_fato(usuario, "primeiro_encontro", local, meta={"fonte": "evento", "ts": ts})
         set_fato(usuario, "primeiro_encontro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
-
     elif t == "primeira_vez":
         set_fato(usuario, "virgem", False, meta={"fonte": "evento", "ts": ts})
         if local:
             set_fato(usuario, "primeira_vez_local", local, meta={"fonte": "evento", "ts": ts})
         set_fato(usuario, "primeira_vez_resumo", descricao, meta={"fonte": "evento", "ts": ts})
-
     elif t == "episodio_ciume_praia":
         if local:
             set_fato(usuario, "episodio_ciume_local", local, meta={"fonte": "evento", "ts": ts})
         set_fato(usuario, "episodio_ciume_resumo", descricao, meta={"fonte": "evento", "ts": ts})
-
     elif t == "pedido_namoro":
         set_fato(usuario, "relacionamento_status", "namorando", meta={"fonte": "evento", "ts": ts})
         if local:
             set_fato(usuario, "pedido_namoro_local", local, meta={"fonte": "evento", "ts": ts})
         set_fato(usuario, "pedido_namoro_resumo", descricao, meta={"fonte": "evento", "ts": ts})
-
 
 def registrar_evento_canonico(
     usuario: str,
@@ -251,31 +208,40 @@ def registrar_evento_canonico(
     if atualizar_fatos:
         _aplicar_regras_evento_para_fatos(usuario, tipo, descricao, local, ts)
 
+def construir_contexto_memoria(usuario: str) -> str:
+    linhas: List[str] = []
+    fatos = get_fatos(usuario)
+    if "virgem" in fatos:
+        linhas.append(f"STATUS ÍNTIMO: virgem={bool(fatos['virgem'])}")
+    if "parceiro_atual" in fatos:
+        linhas.append(f"RELACIONAMENTO: parceiro_atual={fatos['parceiro_atual']}")
+    if "relacionamento_status" in fatos:
+        linhas.append(f"RELACIONAMENTO_STATUS: {fatos['relacionamento_status']}")
+    if "cidade_atual" in fatos:
+        linhas.append(f"LOCAL: cidade_atual={fatos['cidade_atual']}")
+    if "primeiro_encontro" in fatos:
+        linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
 
-# ========== Validadores básicos ==========
-_RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
-_RE_PROIBIDO_CURSO = re.compile(r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|administraç\w*|econom\w*|sistemas?\b.*inform)\b", re.IGNORECASE)
-_RE_MAE_NAO_JOSELINA = re.compile(r"\bm[ãa]e\b(?![^\.]{0,60}\bJoselina\b)", re.IGNORECASE)
+    e_primeira = ultimo_evento(usuario, "primeira_vez")
+    if e_primeira:
+        dt = e_primeira["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_primeira.get("local") or "local não especificado"
+        linhas.append(f"EVENTO_CANÔNICO: primeira_vez em {dt} @ {lugar}")
 
-def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
-    base = any([
-        _RE_PROIBIDO_CABELO.search(txt),
-        _RE_PROIBIDO_CURSO.search(txt),
-        _RE_MAE_NAO_JOSELINA.search(txt),
-    ])
-    return base
+    e_ciume = ultimo_evento(usuario, "episodio_ciume_praia")
+    if e_ciume:
+        dt = e_ciume["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e_ciume.get("local") or "Praia"
+        linhas.append(f"ÚLTIMO_EVENTO_CIUME: {dt} @ {lugar} — surfista tentou flertar; Janio interveio.")
 
-def _reforco_system() -> Dict[str, str]:
-    return {
-        "role": "system",
-        "content": (
-            "CORREÇÃO: respeite cabelo, curso, mãe, locais e eventos canônicos conforme memória salva. "
-            "Não use metáforas acadêmicas/técnicas."
-        )
-    }
+    resumo = get_resumo(usuario)
+    if resumo:
+        linhas.append(f"RESUMO: {resumo[:600]}")
+    return "\n".join(linhas).strip()
 
-
-# ========== Canon de locais & saneamento de saída ==========
+# ===========================
+# Saneador de locais na saída
+# ===========================
 _CANON_EQUIVALENTES = {
     "clube serra bella": {"serra bella", "serra bela", "clube serra bella", "balada", "clube"},
     "café oregon": {"café oregon", "cafe oregon", "oregon", "cafeteria oregon"},
@@ -320,14 +286,12 @@ def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
     prefer_canon = _resolve_canon_local(prefer) or prefer
     if not prefer_canon:
         return texto
-
     substituir: Dict[str, str] = {}
     for canon, variantes in _CANON_EQUIVALENTES.items():
         if canon == prefer_canon:
             continue
         for v in variantes:
             substituir[v] = prefer_canon
-
     out = texto
     for v, alvo in substituir.items():
         out = re.sub(rf"\b{re.escape(v)}\b", alvo, out, flags=re.IGNORECASE)
@@ -335,44 +299,104 @@ def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
         out = re.sub(rf"\b{re.escape(v.upper())}\b", alvo.upper(), out)
     return out
 
+# ===========================
+# Validadores (consistência)
+# ===========================
+_RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
+_RE_PROIBIDO_CURSO = re.compile(r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|administraç\w*|econom\w*|sistemas?\b.*inform)\b", re.IGNORECASE)
+_RE_MAE_NAO_JOSELINA = re.compile(r"\bm[ãa]e\b(?![^\.]{0,60}\bJoselina\b)", re.IGNORECASE)
 
-# ========== Geração (OpenRouter, Together, HuggingFace) ==========
-def _montar_messages_para_modelo(prompt_usuario: str, usuario: str, limite_tokens_hist: int) -> List[Dict[str, str]]:
+def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
+    base = any([
+        _RE_PROIBIDO_CABELO.search(txt),
+        _RE_PROIBIDO_CURSO.search(txt),
+        _RE_MAE_NAO_JOSELINA.search(txt),
+    ])
+    return base
+
+def _reforco_system() -> Dict[str, str]:
+    return {
+        "role": "system",
+        "content": "CORREÇÃO: respeite cabelo, curso, mãe, locais e eventos canônicos conforme memória salva."
+    }
+
+# ============================================
+# Helper: normalização de conversa para Together
+# ============================================
+def _normalize_messages_for_together(
+    persona_text: str,
+    estilo_text: str,
+    memoria_txt: str,
+    hist: List[Dict[str, str]],
+    prompt_usuario: str,
+) -> List[Dict[str, str]]:
+    """
+    Together exige: [system?], user, assistant, user, assistant...
+    - Funde persona+estilo+memória num ÚNICO system.
+    - Remove cabeças que não comecem em 'user'.
+    - Garante alternância estrita.
+    - Garante que a última msg seja 'user' (o prompt atual).
+    """
+    sys_parts = [persona_text.strip(), estilo_text.strip()]
+    if memoria_txt.strip():
+        sys_parts.append("MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt.strip())
+    system_msg = {"role": "system", "content": "\n\n".join(p for p in sys_parts if p)}
+
+    seq: List[Dict[str, str]] = []
+    for m in hist:
+        r = m.get("role")
+        if r not in ("user", "assistant"):
+            continue
+        if not seq:
+            if r != "user":
+                continue
+        else:
+            if seq[-1]["role"] == r:
+                continue
+        seq.append({"role": r, "content": m.get("content", "")})
+
+    if seq and seq[-1]["role"] == "user":
+        seq[-1]["content"] = (seq[-1]["content"] + "\n\n" + prompt_usuario).strip()
+    else:
+        seq.append({"role": "user", "content": prompt_usuario})
+
+    return [system_msg] + seq
+
+# ================================
+# Geração com OpenRouter/Together/HF
+# ================================
+def gerar_resposta_openrouter(
+    prompt_usuario: str,
+    usuario: str,
+    model: str = "deepseek/deepseek-chat-v3-0324",
+    limite_tokens_hist: int = 120000,
+    provider: str = "openrouter",  # "openrouter" | "together" | "huggingface"
+) -> str:
+    # Histórico (ou boot)
     hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
     if not hist:
         hist = HISTORY_BOOT[:]
+
+    # Memória canônica
     memoria_txt = construir_contexto_memoria(usuario)
-    memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA:\n" + memoria_txt}] if memoria_txt else []
-    messages = [
-        {"role": "system", "content": PERSONA_MARY},
-        {"role": "system", "content": (
-            "Estilo narrativo obrigatório:\n"
-            "- 3 a 5 parágrafos; 2 a 3 frases cada.\n"
-            "- Um traço sensorial por parágrafo.\n"
-            "- 1ª pessoa, romântico direto; sem metáforas acadêmicas/técnicas.\n"
-            "- Mary pode tomar iniciativa (convites, ligações, marcar locais canônicos) com consentimento."
-        )},
-    ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
-    return messages
 
-
-def gerar_resposta_mary(
-    prompt_usuario: str,
-    usuario: str,
-    provedor: str = "OpenRouter",
-    model: str = "deepseek/deepseek-chat-v3-0324",
-    limite_tokens_hist: int = 120000
-) -> str:
-    """
-    provedor: "OpenRouter" | "Together" | "HuggingFace"
-    """
-    messages = _montar_messages_para_modelo(prompt_usuario, usuario, limite_tokens_hist)
-
-    # ===== OpenRouter =====
-    if provedor == "OpenRouter":
-        OPENROUTER_TOKEN = os.environ.get("OPENROUTER_TOKEN") or st.secrets["OPENROUTER_TOKEN"]
+    # ======= OpenRouter (default) =======
+    if provider == "openrouter":
         url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {OPENROUTER_TOKEN}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {st.secrets['OPENROUTER_TOKEN']}", "Content-Type": "application/json"}
+
+        memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA:\n" + memoria_txt}] if memoria_txt else []
+        messages = [
+            {"role": "system", "content": PERSONA_MARY},
+            {"role": "system", "content": (
+                "Estilo narrativo obrigatório:\n"
+                "- 3 a 5 parágrafos, 2 a 3 frases cada.\n"
+                "- Um traço sensorial por parágrafo.\n"
+                "- Mary é ativa (propõe encontros, liga, convida) com consentimento.\n"
+                "- Romântica e direta; sem metáforas de cursos/ciência."
+            )},
+        ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
+
         payload = {
             "model": model,
             "messages": messages,
@@ -386,119 +410,108 @@ def gerar_resposta_mary(
         r.raise_for_status()
         resposta = r.json()["choices"][0]["message"]["content"]
 
-    # ===== Together =====
-    elif provedor == "Together":
-        if Together is None:
-            raise RuntimeError("Biblioteca 'together' não instalada. Adicione 'together' ao requirements.txt.")
-        TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY") or st.secrets["TOGETHER_API_KEY"]
-        client = Together(api_key=TOGETHER_API_KEY)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=3000,
-            temperature=0.6
-        )
-        resposta = resp.choices[0].message.content
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except NameError:
+            pass
 
-    # ===== Hugging Face =====
-    elif provedor == "HuggingFace":
-        if InferenceClient is None:
-            raise RuntimeError("Biblioteca 'huggingface_hub' não instalada. Adicione 'huggingface_hub' ao requirements.txt.")
-        HF_TOKEN = os.environ.get("HUGGINGFACE_API_KEY") or st.secrets["HUGGINGFACE_API_KEY"]
-        client = InferenceClient(model, token=HF_TOKEN)
-
-        # HF não é chat por padrão; concatenamos num único prompt
-        texto = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-        # Parâmetros razoáveis para instrução
-        resposta = client.text_generation(
-            texto,
-            max_new_tokens=700,
-            temperature=0.6,
-            do_sample=True,
-            top_p=0.9,
-            repetition_penalty=1.05
-        )
-
-    else:
-        raise ValueError(f"Provedor desconhecido: {provedor}")
-
-    # Saneia locais
-    try:
-        resposta = _sanitize_locais_na_saida(usuario, resposta)
-    except Exception:
-        pass
-
-    # Retry com reforço se violar regras
-    if _violou_mary(resposta, usuario):
-        # insere reforço e reenvia
-        messages.insert(1, _reforco_system())
-
-        if provedor == "OpenRouter":
-            OPENROUTER_TOKEN = os.environ.get("OPENROUTER_TOKEN") or st.secrets["OPENROUTER_TOKEN"]
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {OPENROUTER_TOKEN}", "Content-Type": "application/json"}
-            payload = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": 3000,
-                "temperature": 0.6,
-                "top_p": 0.9,
-                "presence_penalty": 0.0,
-                "frequency_penalty": 0.2
-            }
+        if _violou_mary(resposta, usuario):
+            messages.insert(1, _reforco_system())
+            payload["messages"] = messages
             r2 = requests.post(url, headers=headers, json=payload, timeout=120)
             r2.raise_for_status()
             resposta = r2.json()["choices"][0]["message"]["content"]
+            try:
+                resposta = _sanitize_locais_na_saida(usuario, resposta)
+            except NameError:
+                pass
 
-        elif provedor == "Together":
-            TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY") or st.secrets["TOGETHER_API_KEY"]
-            client = Together(api_key=TOGETHER_API_KEY)
-            resp2 = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=3000,
-                temperature=0.6
-            )
-            resposta = resp2.choices[0].message.content
+        return resposta
 
-        elif provedor == "HuggingFace":
-            HF_TOKEN = os.environ.get("HUGGINGFACE_API_KEY") or st.secrets["HUGGINGFACE_API_KEY"]
-            client = InferenceClient(model, token=HF_TOKEN)
-            texto = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
-            resposta = client.text_generation(
-                texto,
-                max_new_tokens=700,
-                temperature=0.6,
-                do_sample=True,
-                top_p=0.9,
-                repetition_penalty=1.05
-            )
+    # ======= Together =======
+    if provider == "together":
+        from together import Together
+        client = Together(api_key=st.secrets["TOGETHER_API_KEY"])
+
+        estilo_text = (
+            "Estilo narrativo obrigatório:\n"
+            "- 3 a 5 parágrafos curtos, 2 a 3 frases cada.\n"
+            "- Um traço sensorial por parágrafo.\n"
+            "- Mary é ativa (propõe encontros, liga, convida) com consentimento.\n"
+            "- Romântica e direta; sem metáforas de cursos/ciência.\n"
+        )
+        messages = _normalize_messages_for_together(
+            persona_text=PERSONA_MARY,
+            estilo_text=estilo_text,
+            memoria_txt=memoria_txt or "",
+            hist=hist,
+            prompt_usuario=prompt_usuario,
+        )
+
+        resp = client.chat.completions.create(
+            model=model,  # ex.: "meta-llama/Llama-3-70b-instruct"
+            messages=messages,
+            temperature=0.6,
+            top_p=0.9,
+            max_tokens=3000,
+            presence_penalty=0.0,
+            frequency_penalty=0.2,
+        )
+        resposta = resp.choices[0].message.content
 
         try:
             resposta = _sanitize_locais_na_saida(usuario, resposta)
-        except Exception:
+        except NameError:
             pass
+        return resposta
 
-    return resposta
+    # ======= Hugging Face (chat) =======
+    if provider == "huggingface":
+        # Usa o endpoint de chat da HF Inference (beta). Se não estiver habilitado para seu modelo,
+        # você pode adaptar para text-generation com um prompt concatenado.
+        url = "https://api-inference.huggingface.co/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {st.secrets['HF_API_TOKEN']}", "Content-Type": "application/json"}
 
+        memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA:\n" + memoria_txt}] if memoria_txt else []
+        messages = [
+            {"role": "system", "content": PERSONA_MARY},
+            {"role": "system", "content": (
+                "Estilo narrativo obrigatório:\n"
+                "- 3 a 5 parágrafos, 2 a 3 frases cada.\n"
+                "- Um traço sensorial por parágrafo.\n"
+                "- Mary é ativa (propõe encontros, liga, convida) com consentimento.\n"
+                "- Romântica e direta; sem metáforas de cursos/ciência."
+            )},
+        ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
-# Compat de legado: mantém assinatura antiga usada no app
-def gerar_resposta_openrouter(
-    prompt_usuario: str,
-    usuario: str,
-    model: str = "deepseek/deepseek-chat-v3-0324",
-    limite_tokens_hist: int = 120000
-) -> str:
-    return gerar_resposta_mary(
-        prompt_usuario=prompt_usuario,
-        usuario=usuario,
-        provedor="OpenRouter",
-        model=model,
-        limite_tokens_hist=limite_tokens_hist
-    )
+        payload = {
+            "model": model,  # ex.: "meta-llama/Llama-3-70b-instruct"
+            "messages": messages,
+            "max_tokens": 3000,
+            "temperature": 0.6,
+            "top_p": 0.9,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=120)
+        r.raise_for_status()
+        data = r.json()
+        if "choices" in data and data["choices"]:
+            resposta = data["choices"][0]["message"]["content"]
+        else:
+            # fallback simples
+            resposta = data.get("generated_text", "")
 
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except NameError:
+            pass
+        return resposta
 
-# ========== Utilidades ==========
+    # Se provider inválido
+    raise ValueError(f"Provider desconhecido: {provider!r}")
+
+# ==========
+# Utilidades
+# ==========
 def limpar_memoria_usuario(usuario: str):
     colecao.delete_many({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
