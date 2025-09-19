@@ -7,4 +7,5 @@ tiktoken>=0.7.0
 python-dotenv>=1.0.1
 accelerate>=0.27.2
 requests>=2.31.0
-
+together   # cliente oficial da Together
+huggingface_hub   # cliente oficial da Hugging Face
