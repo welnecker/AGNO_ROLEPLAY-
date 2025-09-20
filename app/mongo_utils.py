@@ -103,7 +103,10 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
     })
 
 def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
-    # case-insensitive por segurança (evita colisões de casing)
+    """
+    Retorna pares alternados user -> assistant em ordem cronológica,
+    respeitando o limite de tokens. (Corrige a ordem para evitar 400.)
+    """
     docs = list(
         colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", 1)])
     )
@@ -114,8 +117,9 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
         tok = len(tokenizer.encode(u)) + len(tokenizer.encode(a))
         if total_tokens + tok > limite_tokens:
             break
-        messages_rev.append({"role": "assistant", "content": a})
+        # ORDEM CORRETA: primeiro user, depois assistant
         messages_rev.append({"role": "user", "content": u})
+        messages_rev.append({"role": "assistant", "content": a})
         total_tokens += tok
 
     if not messages_rev:
@@ -173,7 +177,7 @@ def construir_contexto_memoria(usuario: str) -> str:
     if "primeiro_encontro" in fatos:
         linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
 
-    # Eventos canônicos comuns (agora incluem primeiro_encontro e ciume)
+    # Eventos canônicos comuns
     e_primeiro = ultimo_evento(usuario, "primeiro_encontro")
     if e_primeiro:
         dt = e_primeiro["ts"].strftime("%Y-%m-%d %H:%M")
@@ -310,11 +314,14 @@ def gerar_resposta_openrouter(
 ):
     OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
     url = "https://openrouter.ai/api/v1/chat/completions"
+    try:
+        app_ref = st.secrets["APP_PUBLIC_URL"]
+    except Exception:
+        app_ref = "https://streamlit.app"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_TOKEN}",
         "Content-Type": "application/json",
-        # (opcional, mas ajuda no roteamento/diagnóstico no OpenRouter)
-        "HTTP-Referer": st.secrets.get("APP_PUBLIC_URL", "https://streamlit.app"),
+        "HTTP-Referer": app_ref,
         "X-Title": "AgnoRoleplay | Mary",
     }
 
@@ -344,7 +351,6 @@ def gerar_resposta_openrouter(
          "Mary é livre para avançar quando deseja: se quiser sexo, ela propõe com clareza e busca consentimento; "
          "se ainda não houve a primeira vez, não diga que já houve; se já houve, não diga que continua virgem."
         },
-
     ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
     # NORMALIZA para evitar 400 de alternância inválida
@@ -353,7 +359,7 @@ def gerar_resposta_openrouter(
     payload = {
         "model": model,
         "messages": messages,
-        "max_tokens": 1024,   # mantém mais conservador p/ compatibilidade
+        "max_tokens": 1024,   # conservador e compatível
         "temperature": 0.6,
         "top_p": 0.9,
         "presence_penalty": 0.0,
@@ -405,21 +411,22 @@ def gerar_resposta_openrouter(
 # --- helper: normalize mensagens para evitar 400/alternância inválida ---
 def _normalize_messages(msgs: list[dict]) -> list[dict]:
     """
-    - Remove systems vazios
-    - Remove assistants iniciais até aparecer o primeiro user (HISTORY_BOOT costuma começar com assistant)
-    - Colapsa roles iguais consecutivas (mantém a última)
-    - Garante que haja pelo menos um 'user' antes do envio
+    - Mantém systems no topo.
+    - Remove assistants iniciais até aparecer o primeiro user (HISTORY_BOOT pode começar com assistant).
+    - Colapsa roles iguais consecutivas (mantém a última).
+    - Garante que haja ao menos um 'user'.
     """
     if not msgs:
         return [{"role": "user", "content": "Oi."}]
 
-    # 1) tira systems vazios
-    tmp = [m for m in msgs if not (m["role"] == "system" and not (m.get("content") or "").strip())]
+    # 1) systems ok; remove systems vazios
+    systems = [m for m in msgs if m.get("role") == "system" and (m.get("content") or "").strip()]
+    rest = [m for m in msgs if m.get("role") != "system" and (m.get("content") or "").strip()]
 
     # 2) remove assistants antes do 1º user
     out = []
     viu_user = False
-    for m in tmp:
+    for m in rest:
         if not viu_user and m["role"] == "assistant":
             continue
         if m["role"] == "user":
@@ -438,8 +445,7 @@ def _normalize_messages(msgs: list[dict]) -> list[dict]:
     if not any(m["role"] == "user" for m in col):
         col.append({"role": "user", "content": "Oi."})
 
-    return col
-
+    return systems + col
 
 # ========== Utilidades ==========
 def limpar_memoria_usuario(usuario: str):
