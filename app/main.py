@@ -15,7 +15,7 @@ MODELOS_OPENROUTER = [
     "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-4o-search-preview",
     "qwen/qwen-max",
-    "alibaba/tongyi-deepresearch-30b-a3b",
+    "qwen/qwen3-max",
     "qwen/qwen-vl-max",
 ]
 
