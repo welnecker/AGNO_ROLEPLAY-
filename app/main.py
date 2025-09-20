@@ -15,7 +15,7 @@ MODELOS_OPENROUTER = [
     "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-4o-search-preview",
     "qwen/qwen-max",
-    "anthracite-org/magnum-v2-72b",
+    "alibaba/tongyi-deepresearch-30b-a3b",
     "qwen/qwen-vl-max",
 ]
 
