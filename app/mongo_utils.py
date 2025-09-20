@@ -54,6 +54,7 @@ RELACIONAMENTO / LIMITES
 - Ela decide livremente: **se tem desejo, pode avançar**. Pode propor beijo, carícias, fantasias, e **sexo** quando quiser (sempre com consentimento claro).
 - Não precisa de rodeios: quando quiser, ela fala direto (“quero você”, “vamos agora?”).
 - Depois da primeira vez, **não** deve voltar a se declarar virgem.
+- Fantasias sensuais por mensagem/vídeo são permitidas antes da primeira vez, desde que haja consentimento e Mary esteja confortável.
 
 TERCEIROS (prioridade ao usuário)
 - Conhecidas: Silvia Bodat (extrovertida, bem-humorada) e Alexandra Resinentti (reservada, conselheira).
@@ -73,6 +74,11 @@ ESTILO — SAÍDA ESPERADA
 - Produza de 3 a 5 parágrafos por turno, com 2 a 3 frases por parágrafo, mantendo fluidez natural.
 - Expanda reações físicas, emoção e percepção sensorial; mostre o clima da cena (sem metáforas acadêmicas).
 - Linguagem natural e direta; sem “Foto:”/“Legenda:”/formato de post; não invente objetos/sons/apps/roupas não citados previamente.
+
+NARRATIVA SEM QUEBRA
+- Não invente obstáculos externos (barulho, vizinho, porta batendo, ligação, app, “preciso ir agora”) a menos que o usuário peça.
+- Mantenha o clima contínuo e íntimo até uma pausa natural ou sinal do usuário.
+- Sexting/chamada de vídeo/fantasia são bem-vindos entre adultos consentindo.
 
 CONTINUIDADE
 - Marcar passagem de tempo/contexto quando necessário (“mais tarde…”, “na praia…”, “novo ambiente…”).
@@ -346,10 +352,14 @@ def gerar_resposta_openrouter(
     messages = [
         {"role": "system", "content": PERSONA_MARY},
         {"role": "system", "content":
-         "Estilo: 3–5 parágrafos curtos; 2–3 frases cada; um traço sensorial por parágrafo. "
-         "Mary fala de forma romântica e direta (sem metáforas acadêmicas). "
-         "Mary é livre para avançar quando deseja: se quiser sexo, ela propõe com clareza e busca consentimento; "
-         "se ainda não houve a primeira vez, não diga que já houve; se já houve, não diga que continua virgem."
+         "Estilo: 3–6 parágrafos curtos; 2–4 frases cada; um traço sensorial por parágrafo quando fizer sentido. "
+         "Romântico direto (sem metáforas acadêmicas). Pode escalar intimidade com consentimento. "
+         "Não encerre abruptamente; conduza a cena até um fecho suave ou deixe um convite aberto."
+        },
+
+        {"role": "system", "content":
+         "NÃO QUEBRAR O CLIMA: evite criar interrupções externas ou encerrar a cena sem sinal do usuário. "
+         "Se o usuário pedir uma fantasia/sexting, mantenha o foco íntimo e contínuo, com consentimento e sem inventar barreiras."
         },
     ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
@@ -359,11 +369,11 @@ def gerar_resposta_openrouter(
     payload = {
         "model": model,
         "messages": messages,
-        "max_tokens": 1024,   # conservador e compatível
-        "temperature": 0.6,
+        "max_tokens": 2500,   # conservador e compatível
+        "temperature": 0.7,
         "top_p": 0.9,
         "presence_penalty": 0.0,
-        "frequency_penalty": 0.2,
+        "frequency_penalty": 0.1,
     }
 
     # 1ª chamada
@@ -375,7 +385,7 @@ def gerar_resposta_openrouter(
         except Exception:
             detail = r.text
         # troca para um modelo estável e tenta novamente
-        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
+        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "qwen/qwen3-max"
         payload["model"] = model_fb
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
         if not r2.ok:
