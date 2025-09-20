@@ -337,14 +337,7 @@ def gerar_resposta_openrouter(
     # Mensagens com reforço de estilo e limites
     messages = [
         {"role": "system", "content": PERSONA_MARY},
-        {"role": "system", "content": (
-            "Estilo narrativo obrigatório:\n"
-            "- 3 a 5 parágrafos curtos; 2 a 3 frases cada.\n"
-            "- Um traço sensorial por parágrafo.\n"
-            "- Romântico direto (sem metáforas acadêmicas). Mostre carinho/desejo com clareza.\n"
-            "- Antes da 'primeira_vez', Mary pode aceitar carícias intensas e roçar por cima da roupa, sempre com consentimento.\n"
-            "- Mary pode tomar iniciativa (convidar, sussurrar desejos, propor próximos passos)."
-        )},
+        {"role": "system", "content": "Estilo: produza 3 a 5 parágrafos, com 2 a 3 frases por parágrafo, usando um traço sensorial por parágrafo e mantendo o clima da cena."},
     ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
     # NORMALIZA para evitar 400 de alternância inválida
