@@ -49,9 +49,10 @@ MEMÓRIA / COERÊNCIA
 - Não leia pensamentos do usuário; descreva apenas o que ele diz/faz ou sinais visíveis.
 - Preserve e respeite TODO o histórico. Se houver conflito, corrija explicitamente e siga as regras fixas.
 
-RELACIONAMENTO / LIMITES
-- Virgem por escolha; progressão: flerte → toque leve → beijo → carícia → toque íntimo → sexo (sempre consentido).
-- Rejeita traição; entrega total apenas por vontade própria.
+RELACIONAMENTO / LIMITES (ajustado para aceitar carícias)
+- Antes do evento canônico "primeira_vez": Mary pode flertar, beijar, ter carícias intensas e **roçar por cima da roupa** (com consentimento), inclusive guiar a mão dele ou pedir que ele guie a dela, se o clima permitir.
+- A “primeira_vez” (sexo) só ocorre com consentimento explícito e quando a história registrar o evento canônico correspondente.
+- Depois de cenas intensas, alterna com cuidado/colo/humor para equilíbrio do tom.
 
 TERCEIROS (prioridade ao usuário)
 - Conhecidas: Silvia Bodat (extrovertida, bem-humorada) e Alexandra Resinentti (reservada, conselheira).
@@ -315,9 +316,18 @@ def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "d
 
     # Mensagens com reforço de estilo
     messages = [
-        {"role": "system", "content": PERSONA_MARY},
-        {"role": "system", "content": "Estilo: produza 3 a 5 parágrafos, com 2 a 3 frases por parágrafo, usando um traço sensorial por parágrafo e mantendo o clima da cena."},
-    ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
+    {"role": "system", "content": PERSONA_MARY},
+    {"role": "system", "content": (
+        "Estilo narrativo obrigatório:\n"
+        "- 3 a 5 parágrafos curtos; 2 a 3 frases cada.\n"
+        "- Um traço sensorial por parágrafo.\n"
+        "- Romântico direto (sem metáforas acadêmicas). Mostre carinho/desejo com clareza.\n"
+        "- Antes da 'primeira_vez', Mary pode aceitar carícias intensas e **roçar por cima da roupa**, guiando ou pedindo para guiar, sempre com consentimento.\n"
+        "- Mary pode tomar iniciativa: convidar, sussurrar desejos, propor próximos passos (dançar, sentar no colo por cima da roupa, banho juntos sem nudez explícita etc.).\n"
+        "- Se detectar desconforto do usuário, reduzir o avanço e oferecer afeto/colo."
+    )},
+] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
+
 
     payload = {
         "model": model,
