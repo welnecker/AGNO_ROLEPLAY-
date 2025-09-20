@@ -301,6 +301,7 @@ def _reforco_system():
     }
 
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
+# ========== OpenRouter (com memória canônica, estilo e retry) ==========
 def gerar_resposta_openrouter(
     prompt_usuario: str,
     usuario: str,
@@ -337,7 +338,14 @@ def gerar_resposta_openrouter(
     # Mensagens com reforço de estilo e limites
     messages = [
         {"role": "system", "content": PERSONA_MARY},
-        {"role": "system", "content": "Estilo: produza 3 a 5 parágrafos, com 2 a 3 frases por parágrafo, usando um traço sensorial por parágrafo e mantendo o clima da cena."},
+        {"role": "system", "content": (
+            "Estilo narrativo obrigatório:\n"
+            "- 3 a 5 parágrafos curtos; 2 a 3 frases cada.\n"
+            "- Um traço sensorial por parágrafo.\n"
+            "- Romântico direto (sem metáforas acadêmicas). Mostre carinho/desejo com clareza.\n"
+            "- Antes da 'primeira_vez', Mary pode aceitar carícias intensas e roçar por cima da roupa, sempre com consentimento.\n"
+            "- Mary pode tomar iniciativa (convidar, sussurrar desejos, propor próximos passos)."
+        )},
     ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
     # NORMALIZA para evitar 400 de alternância inválida
@@ -394,6 +402,45 @@ def gerar_resposta_openrouter(
                 pass
 
     return resposta
+
+# --- helper: normalize mensagens para evitar 400/alternância inválida ---
+def _normalize_messages(msgs: list[dict]) -> list[dict]:
+    """
+    - Remove systems vazios
+    - Remove assistants iniciais até aparecer o primeiro user (HISTORY_BOOT costuma começar com assistant)
+    - Colapsa roles iguais consecutivas (mantém a última)
+    - Garante que haja pelo menos um 'user' antes do envio
+    """
+    if not msgs:
+        return [{"role": "user", "content": "Oi."}]
+
+    # 1) tira systems vazios
+    tmp = [m for m in msgs if not (m["role"] == "system" and not (m.get("content") or "").strip())]
+
+    # 2) remove assistants antes do 1º user
+    out = []
+    viu_user = False
+    for m in tmp:
+        if not viu_user and m["role"] == "assistant":
+            continue
+        if m["role"] == "user":
+            viu_user = True
+        out.append(m)
+
+    # 3) colapsa duplicados de user/assistant consecutivos
+    col = []
+    for m in out:
+        if col and col[-1]["role"] == m["role"] and m["role"] in ("user", "assistant"):
+            col[-1] = m
+        else:
+            col.append(m)
+
+    # 4) garante ao menos 1 user
+    if not any(m["role"] == "user" for m in col):
+        col.append({"role": "user", "content": "Oi."})
+
+    return col
+
 
 # ========== Utilidades ==========
 def limpar_memoria_usuario(usuario: str):
