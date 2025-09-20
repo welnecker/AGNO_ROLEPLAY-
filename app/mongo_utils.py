@@ -301,65 +301,104 @@ def _reforco_system():
     }
 
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
-def gerar_resposta_openrouter(prompt_usuario: str, usuario: str, model: str = "deepseek/deepseek-chat-v3-0324", limite_tokens_hist: int = 120000):
+def gerar_resposta_openrouter(
+    prompt_usuario: str,
+    usuario: str,
+    model: str = "deepseek/deepseek-chat-v3-0324",
+    limite_tokens_hist: int = 120000
+):
     OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENROUTER_TOKEN}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_TOKEN}",
+        "Content-Type": "application/json",
+        # (opcional, mas ajuda no roteamento/diagnóstico no OpenRouter)
+        "HTTP-Referer": st.secrets.get("APP_PUBLIC_URL", "https://streamlit.app"),
+        "X-Title": "AgnoRoleplay | Mary",
+    }
 
+    # Evita modelos multimodais/vision por engano
+    low = (model or "").lower()
+    if "vl" in low or "vision" in low:
+        model = "deepseek/deepseek-chat-v3-0324"
+
+    # Histórico (ou boot)
     hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
     if not hist:
         hist = HISTORY_BOOT[:]
 
     # Injeção de memória canônica
     memoria_txt = construir_contexto_memoria(usuario)
-    memoria_msg = [{"role": "system", "content": "MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt}] if memoria_txt.strip() else []
+    memoria_msg = (
+        [{"role": "system", "content": "MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt}]
+        if (memoria_txt or "").strip() else []
+    )
 
-    # Mensagens com reforço de estilo
+    # Mensagens com reforço de estilo e limites
     messages = [
-    {"role": "system", "content": PERSONA_MARY},
-    {"role": "system", "content": (
-        "Estilo narrativo obrigatório:\n"
-        "- 3 a 5 parágrafos curtos; 2 a 3 frases cada.\n"
-        "- Um traço sensorial por parágrafo.\n"
-        "- Romântico direto (sem metáforas acadêmicas). Mostre carinho/desejo com clareza.\n"
-        "- Antes da 'primeira_vez', Mary pode aceitar carícias intensas e **roçar por cima da roupa**, guiando ou pedindo para guiar, sempre com consentimento.\n"
-        "- Mary pode tomar iniciativa: convidar, sussurrar desejos, propor próximos passos (dançar, sentar no colo por cima da roupa, banho juntos sem nudez explícita etc.).\n"
-        "- Se detectar desconforto do usuário, reduzir o avanço e oferecer afeto/colo."
-    )},
-] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
+        {"role": "system", "content": PERSONA_MARY},
+        {"role": "system", "content": (
+            "Estilo narrativo obrigatório:\n"
+            "- 3 a 5 parágrafos curtos; 2 a 3 frases cada.\n"
+            "- Um traço sensorial por parágrafo.\n"
+            "- Romântico direto (sem metáforas acadêmicas). Mostre carinho/desejo com clareza.\n"
+            "- Antes da 'primeira_vez', Mary pode aceitar carícias intensas e roçar por cima da roupa, sempre com consentimento.\n"
+            "- Mary pode tomar iniciativa (convidar, sussurrar desejos, propor próximos passos)."
+        )},
+    ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
+    # NORMALIZA para evitar 400 de alternância inválida
+    messages = _normalize_messages(messages)
 
     payload = {
         "model": model,
         "messages": messages,
-        "max_tokens": 3000,
+        "max_tokens": 1024,   # mantém mais conservador p/ compatibilidade
         "temperature": 0.6,
         "top_p": 0.9,
         "presence_penalty": 0.0,
-        "frequency_penalty": 0.2
+        "frequency_penalty": 0.2,
     }
 
+    # 1ª chamada
     r = requests.post(url, headers=headers, json=payload, timeout=120)
-    r.raise_for_status()
-    resposta = r.json()["choices"][0]["message"]["content"]
+    if not r.ok:
+        # fallback em caso de 400/erro de backend
+        try:
+            detail = r.json()
+        except Exception:
+            detail = r.text
+        # troca para um modelo estável e tenta novamente
+        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
+        payload["model"] = model_fb
+        r2 = requests.post(url, headers=headers, json=payload, timeout=120)
+        if not r2.ok:
+            try:
+                detail2 = r2.json()
+            except Exception:
+                detail2 = r2.text
+            raise requests.HTTPError(f"OpenRouter falhou: {detail} | fallback: {detail2}")
+        resposta = r2.json()["choices"][0]["message"]["content"]
+    else:
+        resposta = r.json()["choices"][0]["message"]["content"]
 
-    # Saneia locais (evita misturar Oregon/Serra Bella/Status etc.)
+    # Saneia locais canônicos (evita confusão Oregon/Serra Bella/Status etc.)
     try:
         resposta = _sanitize_locais_na_saida(usuario, resposta)
     except Exception:
         pass
 
-    # Retry se violar
+    # Retry com reforço se violar a persona/limites
     if _violou_mary(resposta, usuario):
         messages.insert(1, _reforco_system())
-        payload["messages"] = messages
-        r2 = requests.post(url, headers=headers, json=payload, timeout=120)
-        r2.raise_for_status()
-        resposta = r2.json()["choices"][0]["message"]["content"]
-        try:
-            resposta = _sanitize_locais_na_saida(usuario, resposta)
-        except Exception:
-            pass
+        payload["messages"] = _normalize_messages(messages)
+        r3 = requests.post(url, headers=headers, json=payload, timeout=120)
+        if r3.ok:
+            resposta = r3.json()["choices"][0]["message"]["content"]
+            try:
+                resposta = _sanitize_locais_na_saida(usuario, resposta)
+            except Exception:
+                pass
 
     return resposta
 
