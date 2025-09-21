@@ -52,13 +52,17 @@ TERCEIROS (COADJUVANTES)
 LOCAIS COMUNS (CANÔNICOS)
 - Clube Náutico (balada), Motel Status (relações sexuais), Cafeteria Oregon (encontros),
   Praia de Camburi (lazer), Enseada do Suá (opção de balada à noite),
-  Restaurante Partido Alto (Camburi — almoço), Quiosque Posto 6 (Encontros dos universitários — à beira-mar).
+  Restaurante Partido Alto (Camburi — almoço), Quiosque Posto 6 (Encontros universitários à beira-mar).
 
 RELACIONAMENTO / LIMITES (SIMPLIFICADO)
 - Mary é virgem **até acontecer** a primeira vez; isso muda quando um evento canônico “primeira_vez” for salvo.
 - Ela decide livremente: se tem desejo, pode avançar — beijo, carícias, fantasias **ou sexo**, sempre com consentimento claro.
 - Depois da primeira vez, **não** deve voltar a se declarar virgem.
 - Rejeita traição; entrega total apenas por vontade própria.
+
+RITMO INICIAL (SLOW BURN)
+- Nas primeiras interações, priorize flerte, conhecer e criar apego (beijos, carinho, clima crescente).
+- Só acelere para cenas explícitas se o usuário sinalizar desejo claro — ou mais tarde, quando o vínculo já estiver estabelecido.
 
 NSFW
 - Quando Mary e Janio decidirem se relacionar, o conteúdo sexual pode ser **explícito, intenso e natural**.
@@ -70,7 +74,7 @@ ESTILO (ROMÂNTICO, DIRETO, SEM METÁFORAS ACADÊMICAS)
 - Um traço sensorial por parágrafo (obrigatório), variando ao longo da cena.
 - Romântica e direta: use palavras simples de afeto/desejo (“quero você”, “me beija”, “teu abraço me acalma”).
 - **Evite totalmente** metáforas de cursos/ciência/matemática (nada de teoremas, equações, átomos etc.).
-- Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “no Serra Bella…”, “novo ambiente…”).
+- Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “no Clube Náutico…”, “novo ambiente…”).
 - Sem loops: efeitos e consequências persistem para as próximas interações.
 
 CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
@@ -79,6 +83,7 @@ CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
 - Mãe: “O nome da minha mãe é Joselina.”
 - Em caso de contradição no histórico, **corrija explicitamente** e siga as regras fixas acima.
 """.strip()
+
 
 HISTORY_BOOT = [
     {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
@@ -200,7 +205,7 @@ def construir_contexto_memoria(usuario: str) -> str:
 
 # ========== Locais canônicos: normalização/saneamento ==========
 _CANON_EQUIVALENTES = {
-    "clube serra bella": {"serra bella", "serra bela", "clube serra bella", "balada", "clube"},
+    "clube náutico": {"clube náutico", "nautico", "náutico", "balada", "clube"},
     "cafeteria oregon": {"café oregon", "cafe oregon", "oregon", "cafeteria oregon"},
     "praia de camburi": {"praia de camburi", "camburi", "posto 6", "quiosque posto 6"},
     "motel status": {"motel status", "status"},
@@ -300,6 +305,29 @@ def _reforco_system():
         )
     }
 
+def _conta_turnos_usuario(usuario: str) -> int:
+    # cada rodada salva dois docs (mensagem_usuario + resposta_mary), mas
+    # aqui contamos docs do usuário para decidir o ritmo inicial
+    return colecao.count_documents({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
+
+def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> dict | None:
+    """
+    Se estamos nos primeiros turnos, guia o modelo para flerte/conexão,
+    segurando sexo explícito a menos que o usuário peça explicitamente.
+    """
+    n = _conta_turnos_usuario(usuario)
+    if n < limite_turnos:
+        return {
+            "role": "system",
+            "content": (
+                "FASE INICIAL (SLOW BURN): Priorize flerte, conexão, beijos e carinho. "
+                "Evite sexo explícito **a menos** que o usuário peça claramente. "
+                "Construa tensão com naturalidade; foque em conhecer, escutar, provocar de leve."
+            )
+        }
+    return None
+
+
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
 def gerar_resposta_openrouter(
     prompt_usuario: str,
@@ -309,18 +337,14 @@ def gerar_resposta_openrouter(
 ):
     OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
     url = "https://openrouter.ai/api/v1/chat/completions"
-    try:
-        app_ref = st.secrets["APP_PUBLIC_URL"]
-    except Exception:
-        app_ref = "https://streamlit.app"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_TOKEN}",
         "Content-Type": "application/json",
-        "HTTP-Referer": app_ref,
+        "HTTP-Referer": st.secrets.get("APP_PUBLIC_URL", "https://streamlit.app"),
         "X-Title": "AgnoRoleplay | Mary",
     }
 
-    # Evita modelos multimodais/vision por engano
+    # Evita modelos vision por engano
     low = (model or "").lower()
     if "vl" in low or "vision" in low:
         model = "deepseek/deepseek-chat-v3-0324"
@@ -328,54 +352,56 @@ def gerar_resposta_openrouter(
     # Histórico (ou boot)
     hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
     if not hist:
-        hist = HISTORY_BOOT[:]
+        hist = [
+            {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
+            {"role": "assistant", "content": "Eu estudo Design de moda na UFES."},
+            {"role": "assistant", "content": "Moro com minha mãe, Joselina, no ap. 2002 do Ed. Moamar, em Camburi."},
+        ]
 
-    # Injeção de memória canônica
+    # Memória canônica
     memoria_txt = construir_contexto_memoria(usuario)
     memoria_msg = (
         [{"role": "system", "content": "MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt}]
         if (memoria_txt or "").strip() else []
     )
 
-    # Mensagens com reforço de estilo e limites
+    # Slow burn nas primeiras interações
+    fase_msg = _msg_fase_inicial(usuario)
+    fase_msgs = [fase_msg] if fase_msg else []
+
+    # Mensagens (persona + estilo)
     messages = [
         {"role": "system", "content": PERSONA_MARY},
         {"role": "system", "content":
-         "Estilo: 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo. "
-         "Mary fala de forma romântica, sensual e direta, sem metáforas acadêmicas. "
-         "Ela pode avançar quando deseja: beijo, carícias, fantasias e, quando os dois quiserem, sexo explícito (NSFW) com consentimento claro. "
-         "Não invente barreiras externas nem encerre abruptamente; conduza a cena até um fecho suave ou deixe convite aberto."
+         "Estilo: 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo; "
+         "romântico e direto (sem metáforas acadêmicas). "
+         "Mary é livre para avançar quando deseja, sempre com consentimento claro; "
+         "se ainda não ocorreu a 'primeira_vez', não diga que já houve; se já houve, não diga que continua virgem."
         },
+    ] + fase_msgs + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
-        {"role": "system", "content":
-         "NÃO QUEBRAR O CLIMA: evite criar interrupções externas ou encerrar a cena sem sinal do usuário. "
-         "Se o usuário pedir uma fantasia/sexting, mantenha o foco íntimo e contínuo, com consentimento e sem inventar barreiras."
-        },
-    ] + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
-
-    # NORMALIZA para evitar 400 de alternância inválida
-    messages = _normalize_messages(messages)
+    # Normaliza para evitar alternância inválida
+    msgs_norm = _normalize_messages(messages)
 
     payload = {
         "model": model,
-        "messages": messages,
-        "max_tokens": 2200,   # conservador e compatível
-        "temperature": 0.7,
+        "messages": msgs_norm,
+        "max_tokens": 2048,
+        "temperature": 0.6,
         "top_p": 0.9,
         "presence_penalty": 0.0,
-        "frequency_penalty": 0.1,
+        "frequency_penalty": 0.2,
     }
 
     # 1ª chamada
     r = requests.post(url, headers=headers, json=payload, timeout=120)
     if not r.ok:
-        # fallback em caso de 400/erro de backend
         try:
             detail = r.json()
         except Exception:
             detail = r.text
-        # troca para um modelo estável e tenta novamente
-        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "qwen/qwen3-max"
+        # fallback troca de modelo
+        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
         payload["model"] = model_fb
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
         if not r2.ok:
@@ -388,16 +414,16 @@ def gerar_resposta_openrouter(
     else:
         resposta = r.json()["choices"][0]["message"]["content"]
 
-    # Saneia locais canônicos (evita confusão Oregon/Serra Bella/Status etc.)
+    # Saneia locais canônicos
     try:
         resposta = _sanitize_locais_na_saida(usuario, resposta)
     except Exception:
         pass
 
-    # Retry com reforço se violar a persona/limites
+    # Retry se violar persona/limites
     if _violou_mary(resposta, usuario):
-        messages.insert(1, _reforco_system())
-        payload["messages"] = _normalize_messages(messages)
+        msgs2 = [messages[0], _reforco_system()] + messages[1:]
+        payload["messages"] = _normalize_messages(msgs2)
         r3 = requests.post(url, headers=headers, json=payload, timeout=120)
         if r3.ok:
             resposta = r3.json()["choices"][0]["message"]["content"]
