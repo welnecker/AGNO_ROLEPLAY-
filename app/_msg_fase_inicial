@@ -4,6 +4,7 @@ import streamlit as st
 from pymongo import MongoClient
 from urllib.parse import quote_plus
 from datetime import datetime
+from typing import Optional, Dict, Any, List
 import tiktoken
 import requests
 
@@ -84,11 +85,10 @@ CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
 - Em caso de contradição no histórico, **corrija explicitamente** e siga as regras fixas acima.
 """.strip()
 
-
 HISTORY_BOOT = [
     {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
     {"role": "assistant", "content": "Eu estudo Design de moda na UFES."},
-    {"role": "assistant", "content": "Moro com minha mãe, Joselina, ap. 2002 — Edifício Moamar, Camburi. Dirige uma BMW vermelha."},
+    {"role": "assistant", "content": "Moro com minha mãe, Joselina, ap. 2002 — Edifício Moamar, Camburi."},
     {"role": "assistant", "content": "O nome da minha mãe é Joselina. Ela está viva e moramos juntas. Não há tragédias religiosas na minha história."}
 ]
 
@@ -102,7 +102,7 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
         "timestamp": datetime.now().isoformat()
     })
 
-def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
+def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> List[Dict[str, str]]:
     """
     Retorna pares alternados user -> assistant em ordem cronológica,
     respeitando o limite de tokens. (Corrige a ordem para evitar 400.)
@@ -127,14 +127,14 @@ def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000):
     return list(reversed(messages_rev))
 
 # ========== Memória canônica (fatos/eventos/resumo) ==========
-def set_fato(usuario: str, chave: str, valor, meta=None):
+def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
     state.update_one(
         {"usuario": usuario},
         {"$set": {f"fatos.{chave}": valor, f"meta.{chave}": (meta or {}), "atualizado_em": datetime.utcnow()}},
         upsert=True
     )
 
-def get_fatos(usuario: str):
+def get_fatos(usuario: str) -> Dict[str, Any]:
     doc = state.find_one({"usuario": usuario}, {"fatos": 1})
     return (doc or {}).get("fatos", {}) or {}
 
@@ -142,7 +142,7 @@ def get_fato(usuario: str, chave: str, default=None):
     doc = state.find_one({"usuario": usuario}, {"fatos."+chave: 1})
     return (doc or {}).get("fatos", {}).get(chave, default)
 
-def registrar_evento(usuario: str, tipo: str, descricao: str, local: str = None, data_hora: datetime = None, tags=None, extra=None):
+def registrar_evento(usuario: str, tipo: str, descricao: str, local: Optional[str] = None, data_hora: Optional[datetime] = None, tags=None, extra=None):
     eventos.insert_one({
         "usuario": usuario,
         "tipo": tipo,
@@ -164,7 +164,7 @@ def construir_contexto_memoria(usuario: str) -> str:
     """
     Monta um bloco curto com fatos/eventos/linha do tempo que “ancoram” a coerência.
     """
-    linhas = []
+    linhas: List[str] = []
     fatos = get_fatos(usuario)
 
     # Fatos frequentes
@@ -278,7 +278,7 @@ def _violou_virgindade(usuario: str, txt: str) -> bool:
         return bool(re.search(r"\b(sou|ainda sou|continuo)\s+virgem\b", txt, flags=re.IGNORECASE))
     return False
 
-def _violou_mary(txt: str, usuario: str = None) -> bool:
+def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
     base = any([
         _RE_PROIBIDO_CABELO.search(txt),
         _RE_PROIBIDO_CURSO.search(txt),
@@ -292,9 +292,7 @@ def _violou_mary(txt: str, usuario: str = None) -> bool:
         return base or _violou_virgindade(usuario, txt)
     return base
 
-
-
-def _reforco_system():
+def _reforco_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
@@ -307,33 +305,60 @@ def _reforco_system():
         )
     }
 
+# ====== Contador/Slow burn & NSFW boost ======
 def _conta_turnos_usuario(usuario: str) -> int:
-    # cada rodada salva dois docs (mensagem_usuario + resposta_mary), mas
-    # aqui contamos docs do usuário para decidir o ritmo inicial
+    # Conta documentos do usuário (histórico salvo). Basta para decidir fase inicial.
     return colecao.count_documents({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
-def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> dict | None:
-    """
-    Se estamos nos primeiros turnos, guia o modelo para flerte/conexão,
-    segurando sexo explícito a menos que o usuário peça explicitamente.
-    """
-    n = _conta_turnos_usuario(usuario)
-    if n < limite_turnos:
-           return {
+def _tem_primeira_vez(usuario: str) -> bool:
+    """True se já existe evento canônico 'primeira_vez'."""
+    return bool(ultimo_evento(usuario, "primeira_vez"))
+
+def _nsfw_boost_system() -> Dict[str, str]:
+    """Libera e incentiva cena explícita após a primeira vez (sem fade-to-black artificial)."""
+    return {
         "role": "system",
         "content": (
-            "FASE INICIAL (SLOW BURN): Priorize flerte, conexão, beijos e carinho. "
-            "Evite sexo explícito **a menos** que o usuário peça claramente. "
-            "Construa tensão com naturalidade; foque em conhecer, escutar, provocar de leve. "
-            "Mary **NUNCA** deve sugerir motel, quarto, ou sexo antes de criar vínculo e só após evento canônico salvo. "
-            "Sugira encontros públicos, academia, praia, cafeteria e mantenha distância íntima no início."
-            "Mary nunca avança para sexo explícito, motel ou convites íntimos antes de criar vínculo ou evento canônico salvo. "
-            "Evite personagens masculinos não autorizados como protagonistas (motoqueiro, motoboy etc)."
+            "NSFW LIBERADO: Mary e Janio já tiveram a primeira vez. "
+            "É permitido conteúdo sexual explícito e natural (beijos, toques, sexo oral/penetração, orgasmo), "
+            "com carinho e respeito. Não interrompa a cena com barulhos/cortes externos, a menos que o usuário peça. "
+            "Evite eufemismos excessivos; descreva emoções e detalhes sensoriais com fluidez."
         )
     }
 
+def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> Optional[Dict[str, str]]:
+    """
+    Se estamos nos primeiros turnos e AINDA NÃO houve 'primeira_vez',
+    guia o modelo para flerte/conexão e segura NSFW.
+    """
+    if _tem_primeira_vez(usuario):
+        return None  # já pode liberar; nada de slow burn
+    n = _conta_turnos_usuario(usuario)
+    if n < limite_turnos:
+        return {
+            "role": "system",
+            "content": (
+                "FASE INICIAL (SLOW BURN): Priorize flerte, conexão, beijos e carinho. "
+                "Evite sexo explícito a menos que o usuário peça claramente. "
+                "Construa tensão com naturalidade; foque em conhecer, escutar e provocar de leve. "
+                "Evite sugerir motel/quarto/sexo direto nas primeiras interações. "
+                "Sugira encontros públicos (Cafeteria Oregon, Posto 6, caminhada em Camburi, Clube Náutico)."
+            )
+        }
     return None
 
+# ====== Detectores auxiliares ======
+def _contem_convite_motel_ou_sexual(txt: str) -> bool:
+    return bool(re.search(
+        r"\b(motel|fazer amor|transar|quarto|ficar sozinhos|ir para (o|seu|meu) apartamento|oral|penetra(r|ção|ndo)|gozar|minha cama|sua cama|ficar nu[ae]?)\b",
+        txt, re.IGNORECASE
+    ))
+
+def _detecta_coadjuvante_irregular(txt: str) -> bool:
+    return bool(re.search(
+        r"\bmotoqueir[oa]|motoboy|personal trainer[^\w]*(gato|bonito|gostoso|atraente|sedutor)|rapaz desconhecido|homem desconhecido\b",
+        txt, re.IGNORECASE
+    ))
 
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
 def gerar_resposta_openrouter(
@@ -341,7 +366,7 @@ def gerar_resposta_openrouter(
     usuario: str,
     model: str = "deepseek/deepseek-chat-v3-0324",
     limite_tokens_hist: int = 120000
-):
+) -> str:
     OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -359,11 +384,7 @@ def gerar_resposta_openrouter(
     # Histórico (ou boot)
     hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
     if not hist:
-        hist = [
-            {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
-            {"role": "assistant", "content": "Eu estudo Design de moda na UFES."},
-            {"role": "assistant", "content": "Moro com minha mãe, Joselina, no ap. 2002 do Ed. Moamar, em Camburi."},
-        ]
+        hist = HISTORY_BOOT[:]
 
     # Memória canônica
     memoria_txt = construir_contexto_memoria(usuario)
@@ -372,20 +393,20 @@ def gerar_resposta_openrouter(
         if (memoria_txt or "").strip() else []
     )
 
-    # Slow burn nas primeiras interações
+    ja_foi = _tem_primeira_vez(usuario)
     fase_msg = _msg_fase_inicial(usuario)
     fase_msgs = [fase_msg] if fase_msg else []
+    nsfw_msgs = [_nsfw_boost_system()] if ja_foi else []
 
-    # Mensagens (persona + estilo)
+    # Mensagens (persona + estilo + fase/boost + memória + histórico + prompt)
     messages = [
         {"role": "system", "content": PERSONA_MARY},
         {"role": "system", "content":
          "Estilo: 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo; "
          "romântico e direto (sem metáforas acadêmicas). "
-         "Mary é livre para avançar quando deseja, sempre com consentimento claro; "
-         "se ainda não ocorreu a 'primeira_vez', não diga que já houve; se já houve, não diga que continua virgem."
+         "Se ainda não ocorreu a 'primeira_vez', não diga que já houve; se já ocorreu, não diga que continua virgem."
         },
-    ] + fase_msgs + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
+    ] + nsfw_msgs + fase_msgs + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
     # Normaliza para evitar alternância inválida
     msgs_norm = _normalize_messages(messages)
@@ -427,26 +448,18 @@ def gerar_resposta_openrouter(
     except Exception:
         pass
 
-    # Retry se violar persona/limites OU convite erotico/motel fora de contexto OU coadjuvante irregular (early phase, sem primeira vez)
-    if (
-        _violou_mary(resposta, usuario)
-        or (
-            _contem_convite_motel_ou_sexual(resposta)
-            and not ultimo_evento(usuario, "primeira_vez")
-            and _conta_turnos_usuario(usuario) < 8
-        )
-        or _detecta_coadjuvante_irregular(resposta)
-    ):
+    # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
+    precisa_retry = _violou_mary(resposta, usuario)
+
+    # Se AINDA NÃO houve primeira vez, e estamos no começo, pode segurar motel/sexo explícito:
+    if not ja_foi:
+        if _detecta_coadjuvante_irregular(resposta):
+            precisa_retry = True
+        if _contem_convite_motel_ou_sexual(resposta) and _conta_turnos_usuario(usuario) < 8:
+            precisa_retry = True
+
+    if precisa_retry:
         msgs2 = [messages[0], _reforco_system()] + messages[1:]
-        msgs2.insert(1, {
-            "role": "system",
-            "content": (
-                "Mary NÃO deve sugerir motel, sexo ou qualquer proposta sexual ou particular logo nos primeiros encontros. "
-                "Priorize flerte, conversas, encontros públicos suaves (praia, açaí, academia). "
-                "Não protagonize cenas com personagens masculinos não autorizados como motoqueiro ou motoboy. "
-                "Mantenha ritmo SLOW BURN enquanto não houver vínculo ou evento de 'primeira_vez' salvo."
-            )
-        })
         payload["messages"] = _normalize_messages(msgs2)
         r3 = requests.post(url, headers=headers, json=payload, timeout=120)
         if r3.ok:
@@ -456,52 +469,10 @@ def gerar_resposta_openrouter(
             except Exception:
                 pass
 
-
-    # --- INÍCIO: BLOCO para inserir DENTRO da função gerar_resposta_openrouter, antes de retornar resposta ---
-def _contem_convite_motel_ou_sexual(txt: str) -> bool:
-    # Detecção de convite explícito ao motel, sexo, ou encontro particular não plausível na fase inicial
-    return bool(re.search(
-        r"\b(motel|sexo|fazer amor|transar|quarto|ficar sozinhos|ficar só nós dois[ae]?|ir para o seu apartamento|ficar pelad[ao][s]?|chupar|oral|penetra(r|ção|ndo)|trepar|gozar|minha cama|sua cama|ficar nu[ae]?)\b",
-        txt, re.IGNORECASE
-    ))
-
-def _detecta_coadjuvante_irregular(txt: str) -> bool:
-    # Detecta personagens masculinos avulsos como "motoqueiro", "motoboy", "personal trainer sedutor", etc
-    return bool(re.search(
-        r"\bmotoqueir[oa]|motoboy|personal trainer[^\w]*(gato|bonito|gostoso|atraente|sedutor)|rapaz desconhecido|homem desconhecido\b",
-        txt, re.IGNORECASE
-    ))
-
-# Retry se violar canon ou ritmo (proposta sexual indevida em early phase, motel/sexo sem vínculo)
-if _violou_mary(resposta, usuario) or (
-        _contem_convite_motel_ou_sexual(resposta)
-        and not ultimo_evento(usuario, "primeira_vez")
-        and _conta_turnos_usuario(usuario) < 8):
-    msgs2 = [messages[0], _reforco_system()] + messages[1:]
-    # Incluir SLOW BURN system promissor para reprimenda
-    msgs2.insert(1, {
-        "role": "system",
-        "content": (
-            "ATENÇÃO: Mary NÃO deve sugerir sexo, motel ou encontros íntimos diretos nas primeiras interações. "
-            "Restrinja as respostas a flerte, sorrisos, perguntas casuais e encontros públicos leves (cafés, açaí, beach club, etc). "
-            "Só avance sexualmente com vínculo explícito salvo em evento de 'primeira_vez'."
-        )
-    })
-    payload["messages"] = _normalize_messages(msgs2)
-    r3 = requests.post(url, headers=headers, json=payload, timeout=120)
-    if r3.ok:
-        resposta = r3.json()["choices"][0]["message"]["content"]
-        try:
-            resposta = _sanitize_locais_na_saida(usuario, resposta)
-        except Exception:
-            pass
-# --- FIM do bloco: apenas insira antes do return resposta ---
-
-
     return resposta
 
 # --- helper: normalize mensagens para evitar 400/alternância inválida ---
-def _normalize_messages(msgs: list[dict]) -> list[dict]:
+def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """
     - Mantém systems no topo.
     - Remove assistants iniciais até aparecer o primeiro user (HISTORY_BOOT pode começar com assistant).
@@ -516,7 +487,7 @@ def _normalize_messages(msgs: list[dict]) -> list[dict]:
     rest = [m for m in msgs if m.get("role") != "system" and (m.get("content") or "").strip()]
 
     # 2) remove assistants antes do 1º user
-    out = []
+    out: List[Dict[str, str]] = []
     viu_user = False
     for m in rest:
         if not viu_user and m["role"] == "assistant":
@@ -526,7 +497,7 @@ def _normalize_messages(msgs: list[dict]) -> list[dict]:
         out.append(m)
 
     # 3) colapsa duplicados de user/assistant consecutivos
-    col = []
+    col: List[Dict[str, str]] = []
     for m in out:
         if col and col[-1]["role"] == m["role"] and m["role"] in ("user", "assistant"):
             col[-1] = m
