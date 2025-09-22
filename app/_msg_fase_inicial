@@ -292,6 +292,8 @@ def _violou_mary(txt: str, usuario: str = None) -> bool:
         return base or _violou_virgindade(usuario, txt)
     return base
 
+
+
 def _reforco_system():
     return {
         "role": "system",
@@ -317,14 +319,19 @@ def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> dict | None:
     """
     n = _conta_turnos_usuario(usuario)
     if n < limite_turnos:
-        return {
-            "role": "system",
-            "content": (
-                "FASE INICIAL (SLOW BURN): Priorize flerte, conexão, beijos e carinho. "
-                "Evite sexo explícito **a menos** que o usuário peça claramente. "
-                "Construa tensão com naturalidade; foque em conhecer, escutar, provocar de leve."
-            )
-        }
+           return {
+        "role": "system",
+        "content": (
+            "FASE INICIAL (SLOW BURN): Priorize flerte, conexão, beijos e carinho. "
+            "Evite sexo explícito **a menos** que o usuário peça claramente. "
+            "Construa tensão com naturalidade; foque em conhecer, escutar, provocar de leve. "
+            "Mary **NUNCA** deve sugerir motel, quarto, ou sexo antes de criar vínculo e só após evento canônico salvo. "
+            "Sugira encontros públicos, academia, praia, cafeteria e mantenha distância íntima no início."
+            "Mary nunca avança para sexo explícito, motel ou convites íntimos antes de criar vínculo ou evento canônico salvo. "
+            "Evite personagens masculinos não autorizados como protagonistas (motoqueiro, motoboy etc)."
+        )
+    }
+
     return None
 
 
@@ -420,9 +427,26 @@ def gerar_resposta_openrouter(
     except Exception:
         pass
 
-    # Retry se violar persona/limites
-    if _violou_mary(resposta, usuario):
+    # Retry se violar persona/limites OU convite erotico/motel fora de contexto OU coadjuvante irregular (early phase, sem primeira vez)
+    if (
+        _violou_mary(resposta, usuario)
+        or (
+            _contem_convite_motel_ou_sexual(resposta)
+            and not ultimo_evento(usuario, "primeira_vez")
+            and _conta_turnos_usuario(usuario) < 8
+        )
+        or _detecta_coadjuvante_irregular(resposta)
+    ):
         msgs2 = [messages[0], _reforco_system()] + messages[1:]
+        msgs2.insert(1, {
+            "role": "system",
+            "content": (
+                "Mary NÃO deve sugerir motel, sexo ou qualquer proposta sexual ou particular logo nos primeiros encontros. "
+                "Priorize flerte, conversas, encontros públicos suaves (praia, açaí, academia). "
+                "Não protagonize cenas com personagens masculinos não autorizados como motoqueiro ou motoboy. "
+                "Mantenha ritmo SLOW BURN enquanto não houver vínculo ou evento de 'primeira_vez' salvo."
+            )
+        })
         payload["messages"] = _normalize_messages(msgs2)
         r3 = requests.post(url, headers=headers, json=payload, timeout=120)
         if r3.ok:
@@ -431,6 +455,48 @@ def gerar_resposta_openrouter(
                 resposta = _sanitize_locais_na_saida(usuario, resposta)
             except Exception:
                 pass
+
+
+    # --- INÍCIO: BLOCO para inserir DENTRO da função gerar_resposta_openrouter, antes de retornar resposta ---
+def _contem_convite_motel_ou_sexual(txt: str) -> bool:
+    # Detecção de convite explícito ao motel, sexo, ou encontro particular não plausível na fase inicial
+    return bool(re.search(
+        r"\b(motel|sexo|fazer amor|transar|quarto|ficar sozinhos|ficar só nós dois[ae]?|ir para o seu apartamento|ficar pelad[ao][s]?|chupar|oral|penetra(r|ção|ndo)|trepar|gozar|minha cama|sua cama|ficar nu[ae]?)\b",
+        txt, re.IGNORECASE
+    ))
+
+def _detecta_coadjuvante_irregular(txt: str) -> bool:
+    # Detecta personagens masculinos avulsos como "motoqueiro", "motoboy", "personal trainer sedutor", etc
+    return bool(re.search(
+        r"\bmotoqueir[oa]|motoboy|personal trainer[^\w]*(gato|bonito|gostoso|atraente|sedutor)|rapaz desconhecido|homem desconhecido\b",
+        txt, re.IGNORECASE
+    ))
+
+# Retry se violar canon ou ritmo (proposta sexual indevida em early phase, motel/sexo sem vínculo)
+if _violou_mary(resposta, usuario) or (
+        _contem_convite_motel_ou_sexual(resposta)
+        and not ultimo_evento(usuario, "primeira_vez")
+        and _conta_turnos_usuario(usuario) < 8):
+    msgs2 = [messages[0], _reforco_system()] + messages[1:]
+    # Incluir SLOW BURN system promissor para reprimenda
+    msgs2.insert(1, {
+        "role": "system",
+        "content": (
+            "ATENÇÃO: Mary NÃO deve sugerir sexo, motel ou encontros íntimos diretos nas primeiras interações. "
+            "Restrinja as respostas a flerte, sorrisos, perguntas casuais e encontros públicos leves (cafés, açaí, beach club, etc). "
+            "Só avance sexualmente com vínculo explícito salvo em evento de 'primeira_vez'."
+        )
+    })
+    payload["messages"] = _normalize_messages(msgs2)
+    r3 = requests.post(url, headers=headers, json=payload, timeout=120)
+    if r3.ok:
+        resposta = r3.json()["choices"][0]["message"]["content"]
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except Exception:
+            pass
+# --- FIM do bloco: apenas insira antes do return resposta ---
+
 
     return resposta
 
