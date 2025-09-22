@@ -13,7 +13,7 @@ st.title("Roleplay | Mary Massariol")
 st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324")
 MODELOS_OPENROUTER = [
     "deepseek/deepseek-chat-v3-0324",
-    "openai/o3-pro",
+    "anthropic/claude-3.5-haiku",
     "qwen/qwen-max",
     "qwen/qwen3-max",
     "qwen/qwen-vl-max",
