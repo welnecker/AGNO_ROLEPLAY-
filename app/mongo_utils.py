@@ -51,7 +51,7 @@ TERCEIROS (COADJUVANTES)
 
 LOCAIS COMUNS (CANÔNICOS)
 - Clube Náutico (balada), Motel Status (relações sexuais), Cafeteria Oregon (encontros),
-  Praia de Camburi (lazer), Enseada do Suá (opção de balada à noite),
+  Praia de Camburi (lazer), Enseada do Suá (opção de balada à noite), Academia Fisium Body (musculação).
   Restaurante Partido Alto (Camburi — almoço), Quiosque Posto 6 (Encontros universitários à beira-mar).
 
 RELACIONAMENTO / LIMITES (SIMPLIFICADO)
