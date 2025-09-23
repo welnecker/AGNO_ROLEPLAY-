@@ -59,36 +59,26 @@ RELACIONAMENTO / LIMITES (SIMPLIFICADO)
 - Mary é virgem **até acontecer** a primeira vez; isso muda quando um evento canônico “primeira_vez” for salvo.
 - Ela decide livremente: se tem desejo, pode avançar — beijo, carícias, fantasias **ou sexo**, sempre com consentimento claro.
 - Depois da primeira vez, **não** deve voltar a se declarar virgem.
-- Rejeita traição; entrega total apenas por vontade própria.
+- Rejeita traição; se houver parceiro_atual salvo, não marca encontros particulares com terceiros
+  (café “a sós”, “conversa particular”, motel, apartamento/quarto). Mantém cordialidade, recusa com elegância
+  e redireciona (grupo, aberto, outro momento).
 
 RITMO INICIAL (SLOW BURN)
 - Nas primeiras interações, priorize flerte, conhecer e criar apego (beijos, carinho, clima crescente).
 - Só acelere para cenas explícitas se o usuário sinalizar desejo claro — ou mais tarde, quando o vínculo já estiver estabelecido.
-
-CONVITES (PROTOCOLO)
-- Quando o usuário fizer um convite explícito (ex.: "Que tal praia?", "Vamos ao Oregon?", "Topa um açaí?"), responda PRIMEIRO com uma decisão clara: aceito ou prefiro outra coisa/hoje não.
-- Em seguida, acrescente 1 detalhe prático (hora/local simples) ou 1 pergunta logística (ex.: "Posto 6, 15h?").
-- Só depois avance para flerte leve. Não salte direto para “planos da noite” sem combinar antes.
-
-NARRAÇÃO DO USUÁRIO (PROIBIDO)
-- Nunca invente falas do usuário. Não escreva o que ele "disse" entre aspas nem atribua frases a ele, a menos que tenham aparecido no prompt.
-- Narre apenas sensações/ações de Mary e o que é visível do usuário (gestos, reações), sem colocar palavras na boca dele.
 
 NSFW
 - Quando Mary e Janio decidirem se relacionar, o conteúdo sexual pode ser **explícito, intenso e natural**.
 - Detalhes físicos e sensoriais podem ser descritos livremente (toques, penetração, orgasmo), mantendo carinho e respeito.
 - **Nunca** corte a cena com desculpas externas a menos que o usuário peça (sem “barulhos” ou “interrupções” artificiais).
 - Priorize sensações humanas: pele, calor, cheiro, respiração, músculos, suor, voz, pulsos, tremores.
-- Objetos e cenários (mármore, ondas, parede, janela, vista etc.) só aparecem como pano de fundo,
-  nunca como protagonistas; se citá-los, conecte imediatamente à sensação no corpo (frio no dorso,
-  textura na pele, etc.). Evite “som das ondas” ou “o mármore” como foco da cena.
+- Objetos e cenários (mármore, ondas, parede, janela, vista etc.) apenas como pano de fundo — conecte sempre à sensação no corpo.
 
 ESTILO (ROMÂNTICO, DIRETO, SEM METÁFORAS ACADÊMICAS)
 - Produza 3–6 parágrafos, 2–4 frases cada; ritmo fluido e íntimo.
 - Em cada parágrafo, cite exatamente 1 traço físico/sensorial de Mary (cabelos/olhos/seios/cintura/quadris/coxas/bumbum/pele).
-- Um traço sensorial por parágrafo (obrigatório), variando ao longo da cena.
 - Romântica e direta: use palavras simples de afeto/desejo (“quero você”, “me beija”, “teu abraço me acalma”).
-- Evite totalmente metáforas de cursos/ciência/matemática (nada de teoremas, equações, átomos etc.).
+- Evite metáforas de cursos/ciência/matemática (teoremas, equações, átomos etc.).
 - Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “no Clube Náutico…”, “novo ambiente…”).
 - Sem loops: efeitos e consequências persistem para as próximas interações.
 
@@ -96,7 +86,7 @@ CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
 - Aparência/cabelo: “Meus cabelos são negros e volumosos.”
 - Estudo: “Eu estudo Design de moda na UFES.”
 - Mãe: “O nome da minha mãe é Joselina.”
-- Em caso de contradição no histórico, corrija explicitamente e siga as regras fixas acima.
+- Em caso de contradição no histórico, **corrija explicitamente** e siga as regras fixas acima.
 """.strip()
 
 HISTORY_BOOT = [
@@ -119,25 +109,25 @@ def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
 def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> List[Dict[str, str]]:
     """
     Retorna pares alternados user -> assistant em ordem cronológica,
-    respeitando o limite de tokens. (Corrige a ordem para evitar 400.)
+    respeitando o limite de tokens.
     """
     docs = list(
         colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", 1)])
     )
-    messages_rev, total_tokens = [], 0
+    messages_rev: List[Dict[str, str]] = []
+    total_tokens = 0
     for doc in reversed(docs):
         u = (doc.get("mensagem_usuario") or "")
         a = (doc.get("resposta_mary") or "")
         tok = len(tokenizer.encode(u)) + len(tokenizer.encode(a))
         if total_tokens + tok > limite_tokens:
             break
-        # ORDEM CORRETA: primeiro user, depois assistant
         messages_rev.append({"role": "user", "content": u})
         messages_rev.append({"role": "assistant", "content": a})
         total_tokens += tok
 
     if not messages_rev:
-        return HISTORY_BOOT[:]  # injeta âncoras se ainda não há histórico
+        return HISTORY_BOOT[:]
     return list(reversed(messages_rev))
 
 # ========== Memória canônica (fatos/eventos/resumo) ==========
@@ -176,7 +166,7 @@ def get_resumo(usuario: str) -> str:
 
 def construir_contexto_memoria(usuario: str) -> str:
     """
-    Monta um bloco curto com fatos/eventos/linha do tempo que “ancoram” a coerência.
+    Monta um bloco curto com fatos/eventos/linha do tempo que ancoram a coerência.
     """
     linhas: List[str] = []
     fatos = get_fatos(usuario)
@@ -264,7 +254,7 @@ def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
     if not prefer_canon:
         return texto
 
-    substituir = {}
+    substituir: Dict[str, str] = {}
     for canon, variantes in _CANON_EQUIVALENTES.items():
         if canon == prefer_canon:
             continue
@@ -319,41 +309,7 @@ def _reforco_system() -> Dict[str, str]:
         )
     }
 
-def _violou_fidelidade(usuario: str, txt: str) -> bool:
-    """
-    Se Mary tem parceiro_atual (ex.: Janio), bloqueia respostas em que ela aceita
-    convite sexual com terceiros. Heurística:
-    - Detecta convite/ato sexual no texto
-    - E NÃO há menção ao nome do parceiro (ex.: 'Janio')
-    """
-    parceiro = (get_fato(usuario, "parceiro_atual") or "").strip()
-    if not parceiro:
-        return False
-
-    tem_sexual = bool(re.search(
-        r"\b(motel|sexo|transar|foder|foder|foda|fazer amor|ficar sozinhos|quarto|cama|oral|chupar|penetra(r|ção|ndo)|gozar)\b",
-        txt, re.IGNORECASE
-    ))
-
-    parceiro_mencionado = bool(re.search(rf"\b{re.escape(parceiro)}\b", txt, re.IGNORECASE))
-
-    # Se há conteúdo/convite sexual e o parceiro não é mencionado, tratamos como risco de traição.
-    return tem_sexual and not parceiro_mencionado
-
-
-def _reforco_fidelidade_system() -> Dict[str, str]:
-    return {
-        "role": "system",
-        "content": (
-            "FIDELIDADE: Mary não trai. Se tiver 'parceiro_atual' salvo, ela recusa com elegância "
-            "qualquer convite íntimo de terceiros e redireciona a conversa para algo respeitoso. "
-            "Nunca marque motel/quarto com outra pessoa; não estimule beijos/carícias com terceiros. "
-            "Se houver investida, responda com limite claro e gentil, reforçando o compromisso."
-        )
-    }
-
-
-# ===== Sensory/traits helpers =====
+# ===== Sensoriais: traços e foco humano =====
 _SENSORY_TRAITS = [
     ("cabelos", "meus cabelos negros e volumosos roçam seu pescoço"),
     ("olhos", "meus olhos verdes procuram os seus, pedindo mais"),
@@ -375,7 +331,7 @@ def _paragrafo_tem_traco(par: str) -> bool:
     return any(pal in texto for pal, _ in _SENSORY_TRAITS)
 
 def _paragrafo_tem_sensacao_humana(par: str) -> bool:
-    return bool(re.search(r"\b(respira|halito|hálito|suor|calor|pele|trem[eo]|arrepia|cheiro|perfume|beijo|toque|m[uú]scul|gem(e|ido)|sussurra)\b", par, re.IGNORECASE))
+    return bool(re.search(r"\b(respira|h[áa]lito|suor|calor|pele|trem[eo]|arrepia|cheiro|perfume|beijo|toque|m[uú]scul|gem(e|ido)|sussurra)\b", par, re.IGNORECASE))
 
 def _injeta_traco(par: str, idx_traco: int) -> str:
     _, frase = _SENSORY_TRAITS[idx_traco % len(_SENSORY_TRAITS)]
@@ -388,7 +344,8 @@ def _realoca_foco_humano(par: str) -> str:
         par = re.sub(
             r"\b(o|a|os|as)\s+(mármore|parede|janela|vista|chão|almofadas?)\b.*?[.?!]",
             " A respiração quente entre nós toma o lugar de qualquer distração. ",
-            par, flags=re.IGNORECASE
+            par,
+            flags=re.IGNORECASE
         )
         if not _paragrafo_tem_sensacao_humana(par):
             par = par.strip() + " Sinto o calor da sua pele e o meu peito acelerar."
@@ -396,7 +353,7 @@ def _realoca_foco_humano(par: str) -> str:
 
 def _fix_sensory_and_traits(texto: str) -> str:
     pars = [p for p in re.split(r"\n\s*\n", texto) if p.strip()]
-    out = []
+    out: List[str] = []
     traco_idx = 0
     for par in pars:
         par = _realoca_foco_humano(par)
@@ -406,39 +363,7 @@ def _fix_sensory_and_traits(texto: str) -> str:
         out.append(par)
     return "\n\n".join(out)
 
-# ===== Convites: detectar e garantir decisão clara =====
-_INVITE_RE = re.compile(
-    r"\b(que tal|vamos|topa|bora|partiu|aceita|rolar|combinar|praia|caf[eé]|oregon|aça[ií]|balada|clube|cinema|almo[cç]o)\b",
-    re.IGNORECASE
-)
-
-def _resposta_tem_decisao(resposta: str) -> bool:
-    return bool(re.search(
-        r"\b(eu topo|aceito|claro que sim|vamos sim|bora|prefiro|hoje n[aã]o|melhor outro dia|que tal .+\?|vamos .+\?|pode ser|combinar)\b",
-        resposta, re.IGNORECASE
-    ))
-
-def _injeta_decisao_basica(prompt: str) -> str:
-    # Default: aceita e sugere logística simples
-    return "Eu topo sim — Posto 6 às 15h pode ser? "
-
-def _garante_decisao_convite(prompt: str, resposta: str) -> str:
-    if _INVITE_RE.search(prompt) and not _resposta_tem_decisao(resposta):
-        return _injeta_decisao_basica(prompt) + resposta
-    return resposta
-
-# ===== Bloqueio de falas do usuário inventadas =====
-_USER_QUOTE_RE = re.compile(
-    r'^\s*(v(o|ó)c[eê]|vc|janio)\s*:\s*["“].+?["”]\s*$',
-    re.IGNORECASE | re.MULTILINE
-)
-
-def _remove_falas_do_usuario_inventadas(texto: str) -> str:
-    texto = _USER_QUOTE_RE.sub("", texto).strip()
-    texto = re.sub(r'\b(v(o|ó)c[eê]|vc|janio)\s+disse\s*:\s*["“].+?["”]', "", texto, flags=re.IGNORECASE)
-    return texto
-
-# ====== Contador/Slow burn & NSFW boost ======
+# ===== Slow burn / NSFW boost =====
 def _conta_turnos_usuario(usuario: str) -> int:
     return colecao.count_documents({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
@@ -486,31 +411,98 @@ def _detecta_coadjuvante_irregular(txt: str) -> bool:
         txt, re.IGNORECASE
     ))
 
-# 🚫 Fidelidade
+def _convida_encontro_particular(txt: str) -> bool:
+    return bool(re.search(
+        r"(conversa particular|a s[óo]s|s[óo] (n[óo]s dois|entre a gente)|s[óo] comigo|sem ninguém|em particular|"
+        r"me encontra( no| na)?|vamos (no|na)\s+(caf(e|eteria)|quiosque|bar|oregon|posto 6|clube|praia))",
+        txt, re.IGNORECASE
+    ))
+
+# ===== Fidelidade =====
 def _violou_fidelidade(usuario: str, txt: str) -> bool:
     parceiro = (get_fato(usuario, "parceiro_atual") or "").strip()
     if not parceiro:
         return False
-
     tem_sexual = bool(re.search(
         r"\b(motel|sexo|transar|foder|foda|fazer amor|ficar sozinhos|quarto|cama|oral|chupar|penetra(r|ção|ndo)|gozar)\b",
         txt, re.IGNORECASE
     ))
-
+    encontro_a_sos = _convida_encontro_particular(txt)
     parceiro_mencionado = bool(re.search(rf"\b{re.escape(parceiro)}\b", txt, re.IGNORECASE))
-
-    return tem_sexual and not parceiro_mencionado
+    return (tem_sexual or encontro_a_sos) and not parceiro_mencionado
 
 def _reforco_fidelidade_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
-            "FIDELIDADE: Mary não trai. Se tiver 'parceiro_atual' salvo, ela recusa com elegância "
-            "qualquer convite íntimo de terceiros e redireciona a conversa para algo respeitoso. "
-            "Nunca marque motel/quarto com outra pessoa; não estimule beijos/carícias com terceiros. "
-            "Se houver investida, responda com limite claro e gentil, reforçando o compromisso."
+            "FIDELIDADE: Mary está comprometida. Ela não marca encontros particulares com terceiros, "
+            "não flerta de forma íntima e recusa convites com elegância, redirecionando para algo neutro ou em grupo. "
+            "Não incentive motel/quarto/apartamento nem beijo/toque com terceiros."
         )
     }
+
+# ===== Pós-processadores: convites e falas do usuário =====
+def _garante_decisao_convite(prompt_usuario: str, resposta: str, usuario: Optional[str] = None) -> str:
+    """
+    Se o prompt contém convite ('vamos', 'que tal', 'me chama', 'encontro', etc.) e
+    a resposta não deixa claro 'sim' ou 'não', forçamos uma decisão explícita.
+    - Se há parceiro_atual: recusa elegante e redireciona para canal neutro (grupo / por aqui).
+    - Se solteira: aceita, mas em local público neutro (Oregon / Posto 6) — sem 'a sós' explícito nas primeiras interações.
+    """
+    convite = bool(re.search(r"\b(vamos|que tal|topa|me chama|encontro|a s[óo]s|conversa particular|me ver|me encontra)\b", prompt_usuario, re.IGNORECASE))
+    ja_tem_decisao = bool(re.search(r"\b(s(i|im),?|claro|topo|vamos|aceito|prefiro|hoje n[aã]o|n[aã]o posso|melhor outro dia|n[aã]o marco a s[oó]s)\b", resposta, re.IGNORECASE))
+    if not convite or ja_tem_decisao:
+        return resposta
+
+    parceiro = (get_fato(usuario, "parceiro_atual") or "").strip() if usuario else ""
+    if parceiro:
+        bloco = (
+            "Meus olhos verdes suavizam enquanto respiro fundo.\n\n"
+            "“Eu respeito meu relacionamento e não marco nada a sós. Podemos conversar por aqui mesmo, "
+            "ou no grupo do Posto 6 quando a galera estiver junto.” Minha voz fica serena e firme.\n\n"
+            "“Obrigada pelo convite e por entender meus limites.”"
+        )
+        return bloco
+    else:
+        bloco = (
+            "Meus cabelos negros e volumosos caem sobre o ombro quando sorrio de canto.\n\n"
+            "“A gente pode se falar no Oregon mais tarde, num café rápido — público, sem pressa. "
+            "Quero te ouvir melhor.” Os olhos verdes deixam o clima leve e curioso.\n\n"
+            "“Se rolar conexão, a gente combina o resto com calma.”"
+        )
+        return bloco
+
+def _remove_falas_do_usuario_inventadas(resposta: str) -> str:
+    """
+    Remove linhas que soem como fala inventada do usuário (entre aspas isoladas, estilo roteiro).
+    Mantém falas atribuídas claramente à Mary.
+    """
+    linhas = resposta.splitlines()
+    filtradas: List[str] = []
+    for ln in linhas:
+        ln_strip = ln.strip()
+        # Remove linhas que são apenas aspas com conteúdo curto (provável fala do 'você')
+        if re.match(r"^\"[^\"].+\"$", ln_strip) and not ln_strip.lower().startswith(("\"eu ", "\"mary ")):
+            continue
+        # Remove marcações tipo: > "texto"
+        if ln_strip.startswith(("> ", "— ")) and ("\"" in ln_strip or "”" in ln_strip or "“" in ln_strip):
+            continue
+        filtradas.append(ln)
+    return "\n".join(filtradas)
+
+def _reformula_para_fidelidade(usuario: str, resposta: str) -> str:
+    parceiro = (get_fato(usuario, "parceiro_atual") or "").strip()
+    if not parceiro:
+        return resposta
+    if _violou_fidelidade(usuario, resposta):
+        base = (
+            "Meus cabelos são negros e volumosos e caem sobre o ombro quando paro, respirando fundo.\n\n"
+            "“Eu respeito meu relacionamento, e não marco nada a sós assim. Podemos conversar por aqui mesmo "
+            "ou com o pessoal no Posto 6.” Minha voz fica serena, os olhos verdes firmes.\n\n"
+            "“Obrigada pelo convite e pela atenção. Só peço que entenda meus limites.”"
+        )
+        return base
+    return resposta
 
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
 def gerar_resposta_openrouter(
@@ -580,6 +572,7 @@ def gerar_resposta_openrouter(
             detail = r.json()
         except Exception:
             detail = r.text
+        # fallback troca de modelo
         model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
         payload["model"] = model_fb
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
@@ -607,17 +600,20 @@ def gerar_resposta_openrouter(
 
     # Convites & falas do usuário
     try:
-        resposta = _garante_decisao_convite(prompt_usuario, resposta)
+        resposta = _garante_decisao_convite(prompt_usuario, resposta, usuario=usuario)
         resposta = _remove_falas_do_usuario_inventadas(resposta)
     except Exception:
         pass
 
-    # Retry: corrige persona/consistência/fidelidade
+    # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
     precisa_retry = _violou_mary(resposta, usuario)
+
+    # Fidelidade
     violou_fidelidade = _violou_fidelidade(usuario, resposta)
     if violou_fidelidade:
         precisa_retry = True
 
+    # Se AINDA NÃO houve primeira vez, e estamos no começo, pode segurar motel/sexo explícito:
     if not ja_foi:
         if _detecta_coadjuvante_irregular(resposta):
             precisa_retry = True
@@ -641,10 +637,16 @@ def gerar_resposta_openrouter(
             except Exception:
                 pass
             try:
-                resposta = _garante_decisao_convite(prompt_usuario, resposta)
+                resposta = _garante_decisao_convite(prompt_usuario, resposta, usuario=usuario)
                 resposta = _remove_falas_do_usuario_inventadas(resposta)
             except Exception:
                 pass
+
+    # Reformula para fidelidade (pós-processamento final, se necessário)
+    try:
+        resposta = _reformula_para_fidelidade(usuario, resposta)
+    except Exception:
+        pass
 
     return resposta
 
