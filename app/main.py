@@ -3,13 +3,12 @@ import os, sys, re
 from datetime import datetime
 import streamlit as st
 
-# garanta que o diretório de app/ esteja no sys.path antes de importar mongo_utils
+# garanta que o diretório "app/" esteja no sys.path ANTES do import
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
-import mongo_utils as mu
-
+import mongo_utils as mu  # <- esta linha deve conter APENAS isso
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
