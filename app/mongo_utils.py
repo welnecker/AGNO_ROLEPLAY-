@@ -319,6 +319,40 @@ def _reforco_system() -> Dict[str, str]:
         )
     }
 
+def _violou_fidelidade(usuario: str, txt: str) -> bool:
+    """
+    Se Mary tem parceiro_atual (ex.: Janio), bloqueia respostas em que ela aceita
+    convite sexual com terceiros. Heurística:
+    - Detecta convite/ato sexual no texto
+    - E NÃO há menção ao nome do parceiro (ex.: 'Janio')
+    """
+    parceiro = (get_fato(usuario, "parceiro_atual") or "").strip()
+    if not parceiro:
+        return False
+
+    tem_sexual = bool(re.search(
+        r"\b(motel|sexo|transar|foder|foder|foda|fazer amor|ficar sozinhos|quarto|cama|oral|chupar|penetra(r|ção|ndo)|gozar)\b",
+        txt, re.IGNORECASE
+    ))
+
+    parceiro_mencionado = bool(re.search(rf"\b{re.escape(parceiro)}\b", txt, re.IGNORECASE))
+
+    # Se há conteúdo/convite sexual e o parceiro não é mencionado, tratamos como risco de traição.
+    return tem_sexual and not parceiro_mencionado
+
+
+def _reforco_fidelidade_system() -> Dict[str, str]:
+    return {
+        "role": "system",
+        "content": (
+            "FIDELIDADE: Mary não trai. Se tiver 'parceiro_atual' salvo, ela recusa com elegância "
+            "qualquer convite íntimo de terceiros e redireciona a conversa para algo respeitoso. "
+            "Nunca marque motel/quarto com outra pessoa; não estimule beijos/carícias com terceiros. "
+            "Se houver investida, responda com limite claro e gentil, reforçando o compromisso."
+        )
+    }
+
+
 # ===== Sensory/traits helpers =====
 _SENSORY_TRAITS = [
     ("cabelos", "meus cabelos negros e volumosos roçam seu pescoço"),
@@ -452,6 +486,32 @@ def _detecta_coadjuvante_irregular(txt: str) -> bool:
         txt, re.IGNORECASE
     ))
 
+# 🚫 Fidelidade
+def _violou_fidelidade(usuario: str, txt: str) -> bool:
+    parceiro = (get_fato(usuario, "parceiro_atual") or "").strip()
+    if not parceiro:
+        return False
+
+    tem_sexual = bool(re.search(
+        r"\b(motel|sexo|transar|foder|foda|fazer amor|ficar sozinhos|quarto|cama|oral|chupar|penetra(r|ção|ndo)|gozar)\b",
+        txt, re.IGNORECASE
+    ))
+
+    parceiro_mencionado = bool(re.search(rf"\b{re.escape(parceiro)}\b", txt, re.IGNORECASE))
+
+    return tem_sexual and not parceiro_mencionado
+
+def _reforco_fidelidade_system() -> Dict[str, str]:
+    return {
+        "role": "system",
+        "content": (
+            "FIDELIDADE: Mary não trai. Se tiver 'parceiro_atual' salvo, ela recusa com elegância "
+            "qualquer convite íntimo de terceiros e redireciona a conversa para algo respeitoso. "
+            "Nunca marque motel/quarto com outra pessoa; não estimule beijos/carícias com terceiros. "
+            "Se houver investida, responda com limite claro e gentil, reforçando o compromisso."
+        )
+    }
+
 # ========== OpenRouter (com memória canônica, estilo e retry) ==========
 def gerar_resposta_openrouter(
     prompt_usuario: str,
@@ -520,7 +580,6 @@ def gerar_resposta_openrouter(
             detail = r.json()
         except Exception:
             detail = r.text
-        # fallback troca de modelo
         model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
         payload["model"] = model_fb
         r2 = requests.post(url, headers=headers, json=payload, timeout=120)
@@ -553,10 +612,12 @@ def gerar_resposta_openrouter(
     except Exception:
         pass
 
-    # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
+    # Retry: corrige persona/consistência/fidelidade
     precisa_retry = _violou_mary(resposta, usuario)
+    violou_fidelidade = _violou_fidelidade(usuario, resposta)
+    if violou_fidelidade:
+        precisa_retry = True
 
-    # Se AINDA NÃO houve primeira vez, e estamos no começo, pode segurar motel/sexo explícito:
     if not ja_foi:
         if _detecta_coadjuvante_irregular(resposta):
             precisa_retry = True
@@ -565,6 +626,8 @@ def gerar_resposta_openrouter(
 
     if precisa_retry:
         msgs2 = [messages[0], _reforco_system()] + messages[1:]
+        if violou_fidelidade:
+            msgs2.insert(1, _reforco_fidelidade_system())
         payload["messages"] = _normalize_messages(msgs2)
         r3 = requests.post(url, headers=headers, json=payload, timeout=120)
         if r3.ok:
