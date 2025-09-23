@@ -14,9 +14,9 @@ st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324"
 MODELOS_OPENROUTER = [
     "deepseek/deepseek-chat-v3-0324",
     "anthropic/claude-3.5-haiku",
-    "qwen/qwen-max",
+    "thedrummer/anubis-70b-v1.1",
     "qwen/qwen3-max",
-    "qwen/qwen-vl-max",
+    "nousresearch/hermes-3-llama-3.1-405b",
 ]
 
 colm1, colm2 = st.columns([4, 1])
