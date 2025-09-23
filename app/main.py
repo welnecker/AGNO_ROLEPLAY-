@@ -1,12 +1,14 @@
-# app/main.py
-import os, sys, re
-from datetime import datetime
+# app/main.py (topo)
+import re
 import streamlit as st
+from datetime import datetime
 
-# garanta que o diretório "app/" esteja no sys.path ANTES do import
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+# Import protegido do mongo_utils
+try:
+    import mongo_utils as mu
+except Exception as e:
+    mu = None
+    st.error(f"Falha ao importar mongo_utils: {e}")
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
