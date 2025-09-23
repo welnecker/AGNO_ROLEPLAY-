@@ -1,10 +1,15 @@
 # app/main.py
+import os, sys
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
+
 import re
 import streamlit as st
 from datetime import datetime
 
-# Importa o módulo inteiro para permitir fallback caso algumas funções não existam
 import mongo_utils as mu
+
 
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
