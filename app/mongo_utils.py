@@ -494,6 +494,40 @@ def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> Optional[Dict[str
         }
     return None
 
+def _partner_system_msg(usuario: str) -> dict:
+    fatos = get_fatos(usuario) or {}
+    parceiro = fatos.get("parceiro_atual", "").strip() or "Janio"
+    return {
+        "role": "system",
+        "content": (
+            f"RELACIONAMENTO ATIVO: parceiro_atual={parceiro}.\n"
+            "- Mary não trai; recusa convites íntimos de terceiros.\n"
+            "- Se um ato íntimo estiver em andamento e o nome do parceiro não aparecer no turno, "
+            f"assuma e mantenha {parceiro} como parceiro em cena.\n"
+            "- Se perguntarem 'Você tem alguém?', responda afirmando o parceiro atual (sem contradições).\n"
+            "- Se perguntarem 'Conhece {parceiro}?', confirme e reforce o vínculo.\n"
+        )
+    }
+
+_RE_NEGA_REL = re.compile(
+    r"\b(n[aã]o\s+(tenho|possuo)\s+(namorad[oa]|noiv[oa]|parceir[oa])|estou\s+solteir[oa]\b|"
+    r"n[aã]o\s+conhe[cç]o\s+janio)\b", re.IGNORECASE
+)
+
+def _nega_parceiro(resposta: str, usuario: str) -> bool:
+    """Detecta frases que negam o relacionamento atual (ex.: 'não tenho', 'estou solteira', 'não conheço Janio')."""
+    fatos = get_fatos(usuario) or {}
+    parceiro = (fatos.get("parceiro_atual") or "Janio").strip()
+    if not parceiro:
+        parceiro = "Janio"
+    if _RE_NEGA_REL.search(resposta):
+        return True
+    # Também pega negações sutis quando perguntam diretamente sobre o parceiro salvo.
+    if re.search(rf"\bn[aã]o\s+conhe[cç]o\s+{re.escape(parceiro)}\b", resposta, re.IGNORECASE):
+        return True
+    return False
+
+
 def gerar_resposta_openrouter(
     prompt_usuario: str,
     usuario: str,
@@ -554,15 +588,18 @@ def gerar_resposta_openrouter(
             )
         })
 
+    partner_msg = _partner_system_msg(usuario)
+
     # Mensagens
     messages = [
-        {"role": "system", "content": PERSONA_MARY},
-        {"role": "system", "content":
-         "Estilo: 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo; "
-         "romântico e direto (sem metáforas acadêmicas). "
-         "Se ainda não ocorreu a 'primeira_vez', não diga que já houve; se já ocorreu, não diga que continua virgem."
-        },
-    ] + cena_system_msgs + nsfw_msgs + fase_msgs + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
+    {"role": "system", "content": PERSONA_MARY},
+    partner_msg,
+    {"role": "system", "content":
+     "Estilo: 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo; "
+     "romântico e direto (sem metáforas acadêmicas). "
+     "Se ainda não ocorreu a 'primeira_vez', não diga que já houve; se já ocorreu, não diga que continua virgem."
+    },
+] + nsfw_msgs + fase_msgs + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
 
     # Normaliza para evitar alternância inválida
     msgs_norm = _normalize_messages(messages)
@@ -674,6 +711,14 @@ def gerar_resposta_openrouter(
                 pass
 
     return resposta
+
+        # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
+    precisa_retry = _violou_mary(resposta, usuario)
+    
+    # 🚩 Novo: se negar ou “esquecer” o parceiro salvo, força retry
+    if _nega_parceiro(resposta, usuario):
+        precisa_retry = True
+
 
 # --- helper: normalize mensagens para evitar 400/alternância inválida ---
 def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
