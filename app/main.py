@@ -21,49 +21,48 @@ def ensure_janio_context(usuario: str,
     Garante que Janio esteja definido como parceiro atual e (opcionalmente)
     registra primeiro encontro e/ou primeira_vez se ainda não existirem.
     """
+    if mu is None:
+        return
     try:
-        from datetime import datetime
-        import mongo_utils as mu
-    except Exception:
-        return  # se der erro de import, apenas não faz nada
+        # 1) parceiro_atual = Janio (idempotente)
+        fatos = mu.get_fatos(usuario) or {}
+        if fatos.get("parceiro_atual") != "Janio":
+            mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
 
-    # 1) parceiro_atual = Janio (idempotente)
-    fatos = mu.get_fatos(usuario) or {}
-    if fatos.get("parceiro_atual") != "Janio":
-        mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
+        # 2) primeiro_encontro (opcional e idempotente)
+        if registrar_primeiro_encontro:
+            ev = mu.ultimo_evento(usuario, "primeiro_encontro")
+            if not ev:
+                mu.registrar_evento(
+                    usuario=usuario,
+                    tipo="primeiro_encontro",
+                    descricao="Mary e Janio se conheceram oficialmente.",
+                    local="praia de Camburi",
+                    data_hora=datetime.utcnow(),
+                    tags=["primeiro_contato"]
+                )
+                # espelha também como fato breve (ajuda resumos)
+                mu.set_fato(
+                    usuario, "primeiro_encontro", "Janio - Praia de Camburi",
+                    meta={"fonte": "auto-init"}
+                )
 
-    # 2) primeiro_encontro (opcional e idempotente)
-    if registrar_primeiro_encontro:
-        ev = mu.ultimo_evento(usuario, "primeiro_encontro")
-        if not ev:
-            mu.registrar_evento(
-                usuario=usuario,
-                tipo="primeiro_encontro",
-                descricao="Mary e Janio se conheceram oficialmente.",
-                local="praia de Camburi",
-                data_hora=datetime.utcnow(),
-                tags=["primeiro_contato"]
-            )
-            # espelha também como fato breve (ajuda resumos)
-            mu.set_fato(
-                usuario, "primeiro_encontro", "Janio - Praia de Camburi",
-                meta={"fonte": "auto-init"}
-            )
-
-    # 3) primeira_vez (opcional; só use quando quiser liberar NSFW total)
-    if registrar_primeira_vez:
-        ev_pv = mu.ultimo_evento(usuario, "primeira_vez")
-        if not ev_pv:
-            mu.registrar_evento(
-                usuario=usuario,
-                tipo="primeira_vez",
-                descricao="Mary e Janio tiveram sua primeira vez.",
-                local="motel status",
-                data_hora=datetime.utcnow(),
-                tags=["nsfw_liberado"]
-            )
-            # Se você também usa um fato 'virgem', pode atualizá-lo:
-            mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
+        # 3) primeira_vez (opcional; só use quando quiser liberar NSFW total)
+        if registrar_primeira_vez:
+            ev_pv = mu.ultimo_evento(usuario, "primeira_vez")
+            if not ev_pv:
+                mu.registrar_evento(
+                    usuario=usuario,
+                    tipo="primeira_vez",
+                    descricao="Mary e Janio tiveram sua primeira vez.",
+                    local="motel status",
+                    data_hora=datetime.utcnow(),
+                    tags=["nsfw_liberado"]
+                )
+                # Se você também usa um fato 'virgem', pode atualizá-lo:
+                mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
+    except Exception as e:
+        st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
 
 # ==== Seletor de modelo (OpenRouter) ====
 st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324")
@@ -154,15 +153,11 @@ if not usuario_atual:
 else:
     st.success(f"Usuário ativo: **{usuario_atual}**")
     # --- Inicializa Janio como parceiro canônico assim que houver usuário ativo ---
-    if mu is not None:
-        try:
-            ensure_janio_context(
-                usuario_atual,
-                registrar_primeiro_encontro=True,
-                registrar_primeira_vez=False  # mude para True quando quiser liberar NSFW total
-            )
-        except Exception as e:
-            st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
+    ensure_janio_context(
+        usuario_atual,
+        registrar_primeiro_encontro=True,
+        registrar_primeira_vez=False  # mude para True quando quiser liberar NSFW total
+    )
 
 # ==== Memória Canônica (manual) ====
 st.sidebar.markdown("---")
@@ -175,8 +170,8 @@ st.session_state.setdefault("mem_local", "")
 
 st.session_state.mem_tipo = st.sidebar.radio("Tipo de memória", ["Fato", "Evento"], horizontal=True)
 
-# Desabilita salvar/descartar se não tiver usuário ativo
-btn_disabled = not bool(usuario_atual)
+# Desabilita salvar/descartar se não tiver usuário ativo OU mu não está disponível
+btn_disabled = (not bool(usuario_atual)) or (mu is None)
 
 if st.session_state.mem_tipo == "Fato":
     st.session_state.mem_chave = st.sidebar.text_input(
@@ -191,8 +186,8 @@ if st.session_state.mem_tipo == "Fato":
     colf1, colf2 = st.sidebar.columns(2)
     with colf1:
         if st.button("💾 Salvar fato", disabled=btn_disabled):
-            if not usuario_atual:
-                st.sidebar.warning("Escolha um usuário antes de salvar.")
+            if not usuario_atual or mu is None:
+                st.sidebar.warning("Escolha um usuário e verifique a conexão com o banco.")
             elif st.session_state.mem_chave.strip() and st.session_state.mem_valor.strip():
                 mu.state.update_one(
                     {"usuario": usuario_atual},
@@ -233,8 +228,8 @@ else:
     cole1, cole2 = st.sidebar.columns(2)
     with cole1:
         if st.button("💾 Salvar evento", disabled=btn_disabled):
-            if not usuario_atual:
-                st.sidebar.warning("Escolha um usuário antes de salvar.")
+            if not usuario_atual or mu is None:
+                st.sidebar.warning("Escolha um usuário e verifique a conexão com o banco.")
             elif st.session_state.mem_chave.strip() and st.session_state.mem_valor.strip():
                 # Usa wrapper se existir; caso contrário, cai no registrar_evento simples
                 if hasattr(mu, "registrar_evento_canonico"):
@@ -270,7 +265,7 @@ else:
 # Listagem rápida das memórias já salvas
 st.sidebar.markdown("---")
 st.sidebar.caption("Memórias salvas")
-if usuario_atual:
+if usuario_atual and mu is not None:
     try:
         fatos_exist = mu.get_fatos(usuario_atual)
     except Exception:
@@ -289,11 +284,15 @@ else:
         st.sidebar.write("_Nenhum fato salvo._")
 
     st.sidebar.markdown("**Eventos (últimos 5)**")
-    for ev in list(
-        mu.eventos.find({"usuario": usuario_atual}).sort([("ts", -1)]).limit(5)
-    ):
-        ts = ev.get("ts").strftime("%Y-%m-%d %H:%M") if ev.get("ts") else "sem data"
-        st.sidebar.write(f"- **{ev.get('tipo','?')}** — {ev.get('descricao','?')} ({ev.get('local','?')}) em {ts}")
+    if usuario_atual and mu is not None:
+        try:
+            for ev in list(
+                mu.eventos.find({"usuario": usuario_atual}).sort([("ts", -1)]).limit(5)
+            ):
+                ts = ev.get("ts").strftime("%Y-%m-%d %H:%M") if ev.get("ts") else "sem data"
+                st.sidebar.write(f"- **{ev.get('tipo','?')}** — {ev.get('descricao','?')} ({ev.get('local','?')}) em {ts}")
+        except Exception as e:
+            st.sidebar.warning(f"Não foi possível listar eventos: {e}")
 
 # ===== Enredo inicial =====
 st.session_state.enredo_inicial = st.text_area(
@@ -306,36 +305,42 @@ st.session_state.enredo_inicial = st.text_area(
 # ===== Controles de memória do chat =====
 cc1, cc2, cc3 = st.columns(3)
 with cc1:
-    if st.button("🔄 Resetar histórico (chat)", disabled=not usuario_atual):
-        mu.limpar_memoria_usuario(usuario_atual)
+    if st.button("🔄 Resetar histórico (chat)", disabled=(not usuario_atual) or (mu is None)):
+        if mu is not None:
+            mu.limpar_memoria_usuario(usuario_atual)
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.success(f"Histórico de {usuario_atual} apagado (memórias canônicas preservadas).")
 
 with cc2:
-    if st.button("🧠 Apagar TUDO (chat + memórias)", disabled=not usuario_atual):
-        mu.apagar_tudo_usuario(usuario_atual)
+    if st.button("🧠 Apagar TUDO (chat + memórias)", disabled=(not usuario_atual) or (mu is None)):
+        if mu is not None:
+            mu.apagar_tudo_usuario(usuario_atual)
         st.session_state.mary_log = []
         st.session_state.enredo_publicado = False
         st.success(f"Chat e memórias canônicas de {usuario_atual} foram apagados.")
 
 with cc3:
-    if st.button("⏪ Apagar último turno", disabled=not usuario_atual):
-        mu.apagar_ultima_interacao_usuario(usuario_atual)
-        st.session_state.mary_log = mu.montar_historico_openrouter(usuario_atual)
+    if st.button("⏪ Apagar último turno", disabled=(not usuario_atual) or (mu is None)):
+        if mu is not None:
+            mu.apagar_ultima_interacao_usuario(usuario_atual)
+            st.session_state.mary_log = mu.montar_historico_openrouter(usuario_atual)
         st.info("Última interação apagada.")
 
 # ===== Publica ENREDO se necessário =====
-if usuario_atual and st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado:
-    if mu.colecao.count_documents({
-        "usuario": {"$regex": f"^{re.escape(usuario_atual)}$", "$options": "i"},
-        "mensagem_usuario": "__ENREDO_INICIAL__"
-    }) == 0:
-        mu.salvar_interacao(usuario_atual, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
-        st.session_state.enredo_publicado = True
+if usuario_atual and st.session_state.enredo_inicial.strip() and not st.session_state.enredo_publicado and mu is not None:
+    try:
+        if mu.colecao.count_documents({
+            "usuario": {"$regex": f"^{re.escape(usuario_atual)}$", "$options": "i"},
+            "mensagem_usuario": "__ENREDO_INICIAL__"
+        }) == 0:
+            mu.salvar_interacao(usuario_atual, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
+            st.session_state.enredo_publicado = True
+    except Exception as e:
+        st.warning(f"Não foi possível publicar o enredo: {e}")
 
 # ===== Carrega histórico =====
-if usuario_atual:
+if usuario_atual and mu is not None:
     st.session_state.mary_log = mu.montar_historico_openrouter(usuario_atual)
 else:
     st.session_state.mary_log = []
@@ -343,6 +348,8 @@ else:
 # ===== Diagnóstico (opcional) =====
 with st.expander("🔍 Diagnóstico do banco"):
     try:
+        if mu is None:
+            raise RuntimeError("mongo_utils não disponível.")
         from pymongo import DESCENDING
         st.write(f"**DB**: `{mu.db.name}`")
         st.write(f"**Coleções**: {[c for c in mu.db.list_collection_names()]}")
@@ -399,17 +406,22 @@ if usuario_atual:
         with st.chat_message("user"):
             st.markdown(prompt)
         try:
-            resposta = mu.gerar_resposta_openrouter(
-                prompt, usuario_atual, model=st.session_state.modelo_escolhido
-            )
+            if mu is not None:
+                resposta = mu.gerar_resposta_openrouter(
+                    prompt, usuario_atual, model=st.session_state.modelo_escolhido
+                )
+            else:
+                raise RuntimeError("mongo_utils indisponível — não foi possível gerar resposta.")
         except Exception as e:
             st.error(f"Falha ao gerar resposta: {e}")
             resposta = "Desculpa, tive um problema para responder agora. Pode tentar de novo?"
         try:
-            mu.salvar_interacao(usuario_atual, prompt, resposta)
+            if mu is not None:
+                mu.salvar_interacao(usuario_atual, prompt, resposta)
         except Exception as e:
             st.warning(f"Não consegui salvar a interação: {e}")
-        st.session_state.mary_log = mu.montar_historico_openrouter(usuario_atual)
+        if mu is not None:
+            st.session_state.mary_log = mu.montar_historico_openrouter(usuario_atual)
         with st.chat_message("assistant", avatar="💚"):
             st.markdown(resposta)
 else:
