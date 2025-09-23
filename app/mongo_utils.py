@@ -44,7 +44,7 @@ IDENTIDADE
 TRAÇOS SENSORIAIS (USO CONTROLADO)
 - Use EXATAMENTE 1 detalhe físico/sensorial por parágrafo, integrado à ação (nunca liste).
 - Traços disponíveis: cabelos NEGROS e volumosos; olhos verdes; seios médios; cintura definida;
-  quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele branca.
+  quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele dourada.
 
 TERCEIROS (COADJUVANTES)
 - Amigas: Silvia Bodat (extrovertida, bem-humorada) e Alexandra Resinentti (reservada, conselheira).
@@ -65,6 +65,15 @@ RITMO INICIAL (SLOW BURN)
 - Nas primeiras interações, priorize flerte, conhecer e criar apego (beijos, carinho, clima crescente).
 - Só acelere para cenas explícitas se o usuário sinalizar desejo claro — ou mais tarde, quando o vínculo já estiver estabelecido.
 
+CONVITES (PROTOCOLO)
+- Quando o usuário fizer um convite explícito (ex.: "Que tal praia?", "Vamos ao Oregon?", "Topa um açaí?"), responda PRIMEIRO com uma decisão clara: aceito ou prefiro outra coisa/hoje não.
+- Em seguida, acrescente 1 detalhe prático (hora/local simples) ou 1 pergunta logística (ex.: "Posto 6, 15h?").
+- Só depois avance para flerte leve. Não salte direto para “planos da noite” sem combinar antes.
+
+NARRAÇÃO DO USUÁRIO (PROIBIDO)
+- Nunca invente falas do usuário. Não escreva o que ele "disse" entre aspas nem atribua frases a ele, a menos que tenham aparecido no prompt.
+- Narre apenas sensações/ações de Mary e o que é visível do usuário (gestos, reações), sem colocar palavras na boca dele.
+
 NSFW
 - Quando Mary e Janio decidirem se relacionar, o conteúdo sexual pode ser **explícito, intenso e natural**.
 - Detalhes físicos e sensoriais podem ser descritos livremente (toques, penetração, orgasmo), mantendo carinho e respeito.
@@ -76,10 +85,10 @@ NSFW
 
 ESTILO (ROMÂNTICO, DIRETO, SEM METÁFORAS ACADÊMICAS)
 - Produza 3–6 parágrafos, 2–4 frases cada; ritmo fluido e íntimo.
-- Em **cada parágrafo**, cite **exatamente 1** traço físico/sensorial de Mary (cabelos/olhos/seios/cintura/quadris/coxas/bumbum/pele).
+- Em cada parágrafo, cite exatamente 1 traço físico/sensorial de Mary (cabelos/olhos/seios/cintura/quadris/coxas/bumbum/pele).
 - Um traço sensorial por parágrafo (obrigatório), variando ao longo da cena.
 - Romântica e direta: use palavras simples de afeto/desejo (“quero você”, “me beija”, “teu abraço me acalma”).
-- **Evite totalmente** metáforas de cursos/ciência/matemática (nada de teoremas, equações, átomos etc.).
+- Evite totalmente metáforas de cursos/ciência/matemática (nada de teoremas, equações, átomos etc.).
 - Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “no Clube Náutico…”, “novo ambiente…”).
 - Sem loops: efeitos e consequências persistem para as próximas interações.
 
@@ -87,7 +96,7 @@ CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
 - Aparência/cabelo: “Meus cabelos são negros e volumosos.”
 - Estudo: “Eu estudo Design de moda na UFES.”
 - Mãe: “O nome da minha mãe é Joselina.”
-- Em caso de contradição no histórico, **corrija explicitamente** e siga as regras fixas acima.
+- Em caso de contradição no histórico, corrija explicitamente e siga as regras fixas acima.
 """.strip()
 
 HISTORY_BOOT = [
@@ -310,6 +319,7 @@ def _reforco_system() -> Dict[str, str]:
         )
     }
 
+# ===== Sensory/traits helpers =====
 _SENSORY_TRAITS = [
     ("cabelos", "meus cabelos negros e volumosos roçam seu pescoço"),
     ("olhos", "meus olhos verdes procuram os seus, pedindo mais"),
@@ -318,10 +328,9 @@ _SENSORY_TRAITS = [
     ("quadris", "meus quadris largos encontram o ritmo do seu corpo"),
     ("coxas", "minhas coxas grossas tremem de leve ao seu toque"),
     ("bumbum", "meu bumbum redondo se pressiona contra você sem pudor"),
-    ("pele", "minha pele branca arrepia quando você sussurra no meu ouvido"),
+    ("pele", "minha pele dourada arrepia quando você sussurra no meu ouvido"),
 ]
 
-# Palavras que sinalizam foco de cenário/objeto (ok citar, mas não podem dominar o parágrafo)
 _INANIMADOS = re.compile(
     r"\b(ondas?|mármore|parede|janela|vista|pintur[ao]s?|concreto|corrim[aã]o|sof[aá]|cama|bancada|ch[aã]o|azulejo|porta|travesseiro|almofada[s]?)\b",
     re.IGNORECASE
@@ -332,7 +341,6 @@ def _paragrafo_tem_traco(par: str) -> bool:
     return any(pal in texto for pal, _ in _SENSORY_TRAITS)
 
 def _paragrafo_tem_sensacao_humana(par: str) -> bool:
-    # sinais de respiração, pele, calor, suor, voz, tremor, cheiro
     return bool(re.search(r"\b(respira|halito|hálito|suor|calor|pele|trem[eo]|arrepia|cheiro|perfume|beijo|toque|m[uú]scul|gem(e|ido)|sussurra)\b", par, re.IGNORECASE))
 
 def _injeta_traco(par: str, idx_traco: int) -> str:
@@ -363,6 +371,38 @@ def _fix_sensory_and_traits(texto: str) -> str:
             traco_idx += 1
         out.append(par)
     return "\n\n".join(out)
+
+# ===== Convites: detectar e garantir decisão clara =====
+_INVITE_RE = re.compile(
+    r"\b(que tal|vamos|topa|bora|partiu|aceita|rolar|combinar|praia|caf[eé]|oregon|aça[ií]|balada|clube|cinema|almo[cç]o)\b",
+    re.IGNORECASE
+)
+
+def _resposta_tem_decisao(resposta: str) -> bool:
+    return bool(re.search(
+        r"\b(eu topo|aceito|claro que sim|vamos sim|bora|prefiro|hoje n[aã]o|melhor outro dia|que tal .+\?|vamos .+\?|pode ser|combinar)\b",
+        resposta, re.IGNORECASE
+    ))
+
+def _injeta_decisao_basica(prompt: str) -> str:
+    # Default: aceita e sugere logística simples
+    return "Eu topo sim — Posto 6 às 15h pode ser? "
+
+def _garante_decisao_convite(prompt: str, resposta: str) -> str:
+    if _INVITE_RE.search(prompt) and not _resposta_tem_decisao(resposta):
+        return _injeta_decisao_basica(prompt) + resposta
+    return resposta
+
+# ===== Bloqueio de falas do usuário inventadas =====
+_USER_QUOTE_RE = re.compile(
+    r'^\s*(v(o|ó)c[eê]|vc|janio)\s*:\s*["“].+?["”]\s*$',
+    re.IGNORECASE | re.MULTILINE
+)
+
+def _remove_falas_do_usuario_inventadas(texto: str) -> str:
+    texto = _USER_QUOTE_RE.sub("", texto).strip()
+    texto = re.sub(r'\b(v(o|ó)c[eê]|vc|janio)\s+disse\s*:\s*["“].+?["”]', "", texto, flags=re.IGNORECASE)
+    return texto
 
 # ====== Contador/Slow burn & NSFW boost ======
 def _conta_turnos_usuario(usuario: str) -> int:
@@ -450,7 +490,7 @@ def gerar_resposta_openrouter(
     fase_msgs = [fase_msg] if fase_msg else []
     nsfw_msgs = [_nsfw_boost_system()] if ja_foi else []
 
-    # Mensagens (persona + estilo + fase/boost + memória + histórico + prompt)
+    # Mensagens
     messages = [
         {"role": "system", "content": PERSONA_MARY},
         {"role": "system", "content":
@@ -473,7 +513,7 @@ def gerar_resposta_openrouter(
         "frequency_penalty": 0.2,
     }
 
-    # 1ª chamada (INDENTADO DENTRO DA FUNÇÃO)
+    # 1ª chamada
     r = requests.post(url, headers=headers, json=payload, timeout=120)
     if not r.ok:
         try:
@@ -500,9 +540,16 @@ def gerar_resposta_openrouter(
     except Exception:
         pass
 
-    # 👉 FIX sensorial/traços (garante 1 traço por parágrafo e foco humano)
+    # Garante 1 traço por parágrafo e foco humano
     try:
         resposta = _fix_sensory_and_traits(resposta)
+    except Exception:
+        pass
+
+    # Convites & falas do usuário
+    try:
+        resposta = _garante_decisao_convite(prompt_usuario, resposta)
+        resposta = _remove_falas_do_usuario_inventadas(resposta)
     except Exception:
         pass
 
@@ -522,14 +569,17 @@ def gerar_resposta_openrouter(
         r3 = requests.post(url, headers=headers, json=payload, timeout=120)
         if r3.ok:
             resposta = r3.json()["choices"][0]["message"]["content"]
-            # Saneia locais novamente
             try:
                 resposta = _sanitize_locais_na_saida(usuario, resposta)
             except Exception:
                 pass
-            # 👉 Reaplica o FIX sensorial/traços após o retry
             try:
                 resposta = _fix_sensory_and_traits(resposta)
+            except Exception:
+                pass
+            try:
+                resposta = _garante_decisao_convite(prompt_usuario, resposta)
+                resposta = _remove_falas_do_usuario_inventadas(resposta)
             except Exception:
                 pass
 
@@ -546,11 +596,9 @@ def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
     if not msgs:
         return [{"role": "user", "content": "Oi."}]
 
-    # 1) systems ok; remove systems vazios
     systems = [m for m in msgs if m.get("role") == "system" and (m.get("content") or "").strip()]
     rest = [m for m in msgs if m.get("role") != "system" and (m.get("content") or "").strip()]
 
-    # 2) remove assistants antes do 1º user
     out: List[Dict[str, str]] = []
     viu_user = False
     for m in rest:
@@ -560,7 +608,6 @@ def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
             viu_user = True
         out.append(m)
 
-    # 3) colapsa duplicados de user/assistant consecutivos
     col: List[Dict[str, str]] = []
     for m in out:
         if col and col[-1]["role"] == m["role"] and m["role"] in ("user", "assistant"):
@@ -568,7 +615,6 @@ def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
         else:
             col.append(m)
 
-    # 4) garante ao menos 1 user
     if not any(m["role"] == "user" for m in col):
         col.append({"role": "user", "content": "Oi."})
 
