@@ -26,78 +26,65 @@ def ensure_janio_context(
       - Define parceiro_atual = 'Janio'
       - (Opcional) registra 'primeiro_encontro' e/ou 'primeira_vez'
       - (Opcional) semeia fatos estáveis de Janio (trabalho, moradia, etc.)
-    Todos os writes são idempotentes (não duplicam).
-    Use 'overrides' para ajustar qualquer fato default.
     """
     try:
         from datetime import datetime
         import mongo_utils as mu  # usa o mesmo módulo já importado no app
-    except Exception:
-        return  # se não conseguir importar aqui, apenas não faz nada
 
-    fatos = mu.get_fatos(usuario) or {}
+        fatos = mu.get_fatos(usuario) or {}
 
-    # 0) Defaults dos fatos do Janio (podem ser sobrescritos)
-    defaults = {
-        "parceiro_atual": "Janio",
-        "janio_nome": "Janio Donisete",
-        "janio_profissao": "Personal trainer",
-        "janio_local_trabalho": "Academia Fisium Body",
-        "janio_moradia": "Apartamento em Camburi (próximo à orla)",
-        "janio_cidade": "Vitória/ES",
-        "janio_estilo": "calmo, protetor, competitivo no treino; carinhoso no afeto",
-        "janio_limites": "respeita consentimento; não tolera traição",
-        "janio_locais_publicos": ["Cafeteria Oregon", "Quiosque Posto 6", "Clube Náutico", "Praia de Camburi"],
-        # status da relação — ajuste conforme seu enredo (ex.: "ficando", "namorando", "noivos")
-        "status_relacao": fatos.get("status_relacao", "ficando"),
-    }
+        # 0) Defaults dos fatos do Janio (podem ser sobrescritos)
+        defaults = {
+            "parceiro_atual": "Janio",
+            "janio_nome": "Janio Donisete",
+            "janio_profissao": "Personal trainer",
+            "janio_local_trabalho": "Academia Fisium Body",
+            "janio_moradia": "Apartamento em Camburi (próximo à orla)",
+            "janio_cidade": "Vitória/ES",
+            "janio_estilo": "calmo, protetor, competitivo no treino; carinhoso no afeto",
+            "janio_limites": "respeita consentimento; não tolera traição",
+            "janio_locais_publicos": [
+                "Cafeteria Oregon",
+                "Quiosque Posto 6",
+                "Clube Náutico",
+                "Praia de Camburi",
+            ],
+            "status_relacao": fatos.get("status_relacao", "ficando"),
+        }
 
-    if overrides:
-        defaults.update(overrides)
+        if overrides:
+            defaults.update(overrides)
 
-    # 1) parceiro_atual = Janio (idempotente)
-    if fatos.get("parceiro_atual") != "Janio":
-        mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
+        # 1) parceiro_atual = Janio
+        if fatos.get("parceiro_atual") != "Janio":
+            mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
 
-    # 2) semear fatos do Janio (idempotente)
-    if seed_fatos:
-        for chave, valor in defaults.items():
-            if fatos.get(chave) != valor:
-                mu.set_fato(usuario, chave, valor, meta={"fonte": "auto-init"})
+        # 2) semear fatos do Janio
+        if seed_fatos:
+            for chave, valor in defaults.items():
+                if fatos.get(chave) != valor:
+                    mu.set_fato(usuario, chave, valor, meta={"fonte": "auto-init"})
 
-    # 3) primeiro_encontro (opcional e idempotente)
-    if registrar_primeiro_encontro:
-        ev = mu.ultimo_evento(usuario, "primeiro_encontro")
-        if not ev:
-            mu.registrar_evento(
-                usuario=usuario,
-                tipo="primeiro_encontro",
-                descricao="Mary e Janio se conheceram oficialmente.",
-                local="praia de Camburi",
-                data_hora=datetime.utcnow(),
-                tags=["primeiro_contato"]
-            )
-            mu.set_fato(
-                usuario, "primeiro_encontro", "Janio - Praia de Camburi",
-                meta={"fonte": "auto-init"}
-            )
+        # 3) primeiro_encontro
+        if registrar_primeiro_encontro:
+            ev = mu.ultimo_evento(usuario, "primeiro_encontro")
+            if not ev:
+                mu.registrar_evento(
+                    usuario=usuario,
+                    tipo="primeiro_encontro",
+                    descricao="Mary e Janio se conheceram oficialmente.",
+                    local="praia de Camburi",
+                    data_hora=datetime.utcnow(),
+                    tags=["primeiro_contato"],
+                )
+                mu.set_fato(
+                    usuario,
+                    "primeiro_encontro",
+                    "Janio - Praia de Camburi",
+                    meta={"fonte": "auto-init"},
+                )
 
-    # 4) primeira_vez (opcional; só use quando quiser liberar NSFW total)
-    if registrar_primeira_vez:
-        ev_pv = mu.ultimo_evento(usuario, "primeira_vez")
-        if not ev_pv:
-            mu.registrar_evento(
-                usuario=usuario,
-                tipo="primeira_vez",
-                descricao="Mary e Janio tiveram sua primeira vez.",
-                local="motel status",
-                data_hora=datetime.utcnow(),
-                tags=["nsfw_liberado"]
-            )
-            # Se usa controle de virgindade, sincroniza:
-            mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
-
-        # 3) primeira_vez (opcional; só use quando quiser liberar NSFW total)
+        # 4) primeira_vez
         if registrar_primeira_vez:
             ev_pv = mu.ultimo_evento(usuario, "primeira_vez")
             if not ev_pv:
@@ -107,10 +94,10 @@ def ensure_janio_context(
                     descricao="Mary e Janio tiveram sua primeira vez.",
                     local="motel status",
                     data_hora=datetime.utcnow(),
-                    tags=["nsfw_liberado"]
+                    tags=["nsfw_liberado"],
                 )
-                # Se você também usa um fato 'virgem', pode atualizá-lo:
                 mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
+
     except Exception as e:
         st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
 
