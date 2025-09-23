@@ -69,9 +69,14 @@ NSFW
 - Quando Mary e Janio decidirem se relacionar, o conteúdo sexual pode ser **explícito, intenso e natural**.
 - Detalhes físicos e sensoriais podem ser descritos livremente (toques, penetração, orgasmo), mantendo carinho e respeito.
 - **Nunca** corte a cena com desculpas externas a menos que o usuário peça (sem “barulhos” ou “interrupções” artificiais).
+- Priorize sensações humanas: pele, calor, cheiro, respiração, músculos, suor, voz, pulsos, tremores.
+- Objetos e cenários (mármore, ondas, parede, janela, vista etc.) só aparecem como pano de fundo,
+  nunca como protagonistas; se citá-los, conecte imediatamente à sensação no corpo (frio no dorso,
+  textura na pele, etc.). Evite “som das ondas” ou “o mármore” como foco da cena.
 
 ESTILO (ROMÂNTICO, DIRETO, SEM METÁFORAS ACADÊMICAS)
 - Produza 3–6 parágrafos, 2–4 frases cada; ritmo fluido e íntimo.
+- Em **cada parágrafo**, cite **exatamente 1** traço físico/sensorial de Mary (cabelos/olhos/seios/cintura/quadris/coxas/bumbum/pele).
 - Um traço sensorial por parágrafo (obrigatório), variando ao longo da cena.
 - Romântica e direta: use palavras simples de afeto/desejo (“quero você”, “me beija”, “teu abraço me acalma”).
 - **Evite totalmente** metáforas de cursos/ciência/matemática (nada de teoremas, equações, átomos etc.).
@@ -305,6 +310,65 @@ def _reforco_system() -> Dict[str, str]:
         )
     }
 
+_SENSORY_TRAITS = [
+    ("cabelos", "meus cabelos negros e volumosos roçam seu pescoço"),
+    ("olhos", "meus olhos verdes procuram os seus, pedindo mais"),
+    ("seios", "meus seios médios se comprimem contra o seu peito quente"),
+    ("cintura", "minha cintura definida se encaixa nas suas mãos firmes"),
+    ("quadris", "meus quadris largos encontram o ritmo do seu corpo"),
+    ("coxas", "minhas coxas grossas tremem de leve ao seu toque"),
+    ("bumbum", "meu bumbum redondo se pressiona contra você sem pudor"),
+    ("pele", "minha pele dourada arrepia quando você sussurra no meu ouvido"),
+]
+
+# Palavras que sinalizam foco de cenário/objeto (ok citar, mas não podem dominar o parágrafo)
+_INANIMADOS = re.compile(
+    r"\b(ondas?|mármore|parede|janela|vista|pintur[ao]s?|concreto|corrim[aã]o|sof[aá]|cama|bancada|ch[aã]o|azulejo|porta|travesseiro|almofada[s]?)\b",
+    re.IGNORECASE
+)
+
+def _paragrafo_tem_traco(par: str) -> bool:
+    texto = par.lower()
+    return any(pal in texto for pal, _ in _SENSORY_TRAITS)
+
+def _paragrafo_tem_sensacao_humana(par: str) -> bool:
+    # sinais de respiração, pele, calor, suor, voz, tremor, cheiro
+    return bool(re.search(r"\b(respira|halito|hálito|suor|calor|pele|trem[eo]|arrepia|cheiro|perfume|beijo|toque|m[uú]scul|gem(e|ido)|sussurra)\b", par, re.IGNORECASE))
+
+def _injeta_traco(par: str, idx_traco: int) -> str:
+    pal, frase = _SENSORY_TRAITS[idx_traco % len(_SENSORY_TRAITS)]
+    # injeta uma frase curtinha ao final do parágrafo
+    if par.strip().endswith((".", "!", "?")):
+        return par.strip() + " " + frase + "."
+    return par.strip() + ". " + frase + "."
+
+def _realoca_foco_humano(par: str) -> str:
+    # se há inanimados mas pouca sensação humana, substitui foco por sensação humana
+    if _INANIMADOS.search(par) and not _paragrafo_tem_sensacao_humana(par):
+        # troca frases “vazias” por foco humano suave
+        par = re.sub(r"\b(o|a|os|as)\s+(mármore|parede|janela|vista|chão|almofadas?)\b.*?[.?!]", 
+                     " A respiração quente entre nós toma o lugar de qualquer distração. ", 
+                     par, flags=re.IGNORECASE)
+        # se ainda ficou sem sensação humana clara, adiciona uma curta
+        if not _paragrafo_tem_sensacao_humana(par):
+            par = par.strip() + " Sinto o calor da sua pele e o meu peito acelerar."
+    return par
+
+def _fix_sensory_and_traits(texto: str) -> str:
+    # percorre parágrafos; injeta 1 traço por parágrafo se faltar;
+    # e realoca foco humano quando houver excesso de cenário.
+    pars = [p for p in re.split(r"\n\s*\n", texto) if p.strip()]
+    out = []
+    traco_idx = 0
+    for par in pars:
+        par = _realoca_foco_humano(par)
+        if not _paragrafo_tem_traco(par):
+            par = _injeta_traco(par, traco_idx)
+            traco_idx += 1
+        out.append(par)
+    return "\n\n".join(out)
+
+
 # ====== Contador/Slow burn & NSFW boost ======
 def _conta_turnos_usuario(usuario: str) -> int:
     # Conta documentos do usuário (histórico salvo). Basta para decidir fase inicial.
@@ -421,55 +485,67 @@ def gerar_resposta_openrouter(
         "frequency_penalty": 0.2,
     }
 
-    # 1ª chamada
-    r = requests.post(url, headers=headers, json=payload, timeout=120)
-    if not r.ok:
-        try:
-            detail = r.json()
-        except Exception:
-            detail = r.text
-        # fallback troca de modelo
-        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
-        payload["model"] = model_fb
-        r2 = requests.post(url, headers=headers, json=payload, timeout=120)
-        if not r2.ok:
-            try:
-                detail2 = r2.json()
-            except Exception:
-                detail2 = r2.text
-            raise requests.HTTPError(f"OpenRouter falhou: {detail} | fallback: {detail2}")
-        resposta = r2.json()["choices"][0]["message"]["content"]
-    else:
-        resposta = r.json()["choices"][0]["message"]["content"]
-
-    # Saneia locais canônicos
+   # 1ª chamada
+r = requests.post(url, headers=headers, json=payload, timeout=120)
+if not r.ok:
     try:
-        resposta = _sanitize_locais_na_saida(usuario, resposta)
+        detail = r.json()
     except Exception:
-        pass
+        detail = r.text
+    # fallback troca de modelo
+    model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
+    payload["model"] = model_fb
+    r2 = requests.post(url, headers=headers, json=payload, timeout=120)
+    if not r2.ok:
+        try:
+            detail2 = r2.json()
+        except Exception:
+            detail2 = r2.text
+        raise requests.HTTPError(f"OpenRouter falhou: {detail} | fallback: {detail2}")
+    resposta = r2.json()["choices"][0]["message"]["content"]
+else:
+    resposta = r.json()["choices"][0]["message"]["content"]
 
-    # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
-    precisa_retry = _violou_mary(resposta, usuario)
+# Saneia locais canônicos
+try:
+    resposta = _sanitize_locais_na_saida(usuario, resposta)
+except Exception:
+    pass
 
-    # Se AINDA NÃO houve primeira vez, e estamos no começo, pode segurar motel/sexo explícito:
-    if not ja_foi:
-        if _detecta_coadjuvante_irregular(resposta):
-            precisa_retry = True
-        if _contem_convite_motel_ou_sexual(resposta) and _conta_turnos_usuario(usuario) < 8:
-            precisa_retry = True
+# 👉 FIX sensorial/traços (garante 1 traço por parágrafo e foco humano)
+try:
+    resposta = _fix_sensory_and_traits(resposta)
+except Exception:
+    pass
 
-    if precisa_retry:
-        msgs2 = [messages[0], _reforco_system()] + messages[1:]
-        payload["messages"] = _normalize_messages(msgs2)
-        r3 = requests.post(url, headers=headers, json=payload, timeout=120)
-        if r3.ok:
-            resposta = r3.json()["choices"][0]["message"]["content"]
-            try:
-                resposta = _sanitize_locais_na_saida(usuario, resposta)
-            except Exception:
-                pass
+# Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
+precisa_retry = _violou_mary(resposta, usuario)
 
-    return resposta
+# Se AINDA NÃO houve primeira vez, e estamos no começo, pode segurar motel/sexo explícito:
+if not ja_foi:
+    if _detecta_coadjuvante_irregular(resposta):
+        precisa_retry = True
+    if _contem_convite_motel_ou_sexual(resposta) and _conta_turnos_usuario(usuario) < 8:
+        precisa_retry = True
+
+if precisa_retry:
+    msgs2 = [messages[0], _reforco_system()] + messages[1:]
+    payload["messages"] = _normalize_messages(msgs2)
+    r3 = requests.post(url, headers=headers, json=payload, timeout=120)
+    if r3.ok:
+        resposta = r3.json()["choices"][0]["message"]["content"]
+        # Saneia locais novamente
+        try:
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+        except Exception:
+            pass
+        # 👉 Reaplica o FIX sensorial/traços após o retry
+        try:
+            resposta = _fix_sensory_and_traits(resposta)
+        except Exception:
+            pass
+
+return resposta
 
 # --- helper: normalize mensagens para evitar 400/alternância inválida ---
 def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
