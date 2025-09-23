@@ -10,7 +10,6 @@ from datetime import datetime
 
 import mongo_utils as mu
 
-
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
 
