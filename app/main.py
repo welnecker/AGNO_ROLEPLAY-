@@ -1,4 +1,4 @@
-# app/main.py (topo)
+# app/main.py
 import re
 import streamlit as st
 from datetime import datetime
@@ -13,15 +13,65 @@ except Exception as e:
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
 
+# --- Inicialização canônica de Janio como parceiro da Mary ---
+def ensure_janio_context(usuario: str,
+                         registrar_primeiro_encontro: bool = True,
+                         registrar_primeira_vez: bool = False):
+    """
+    Garante que Janio esteja definido como parceiro atual e (opcionalmente)
+    registra primeiro encontro e/ou primeira_vez se ainda não existirem.
+    """
+    try:
+        from datetime import datetime
+        import mongo_utils as mu
+    except Exception:
+        return  # se der erro de import, apenas não faz nada
+
+    # 1) parceiro_atual = Janio (idempotente)
+    fatos = mu.get_fatos(usuario) or {}
+    if fatos.get("parceiro_atual") != "Janio":
+        mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
+
+    # 2) primeiro_encontro (opcional e idempotente)
+    if registrar_primeiro_encontro:
+        ev = mu.ultimo_evento(usuario, "primeiro_encontro")
+        if not ev:
+            mu.registrar_evento(
+                usuario=usuario,
+                tipo="primeiro_encontro",
+                descricao="Mary e Janio se conheceram oficialmente.",
+                local="praia de Camburi",
+                data_hora=datetime.utcnow(),
+                tags=["primeiro_contato"]
+            )
+            # espelha também como fato breve (ajuda resumos)
+            mu.set_fato(
+                usuario, "primeiro_encontro", "Janio - Praia de Camburi",
+                meta={"fonte": "auto-init"}
+            )
+
+    # 3) primeira_vez (opcional; só use quando quiser liberar NSFW total)
+    if registrar_primeira_vez:
+        ev_pv = mu.ultimo_evento(usuario, "primeira_vez")
+        if not ev_pv:
+            mu.registrar_evento(
+                usuario=usuario,
+                tipo="primeira_vez",
+                descricao="Mary e Janio tiveram sua primeira vez.",
+                local="motel status",
+                data_hora=datetime.utcnow(),
+                tags=["nsfw_liberado"]
+            )
+            # Se você também usa um fato 'virgem', pode atualizá-lo:
+            mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
+
 # ==== Seletor de modelo (OpenRouter) ====
 st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324")
 MODELOS_OPENROUTER = [
     "deepseek/deepseek-chat-v3-0324",
-    "meta-llama/llama-4-maverick",
+    "anthropic/claude-3.5-haiku",
     "thedrummer/anubis-70b-v1.1",
     "qwen/qwen3-max",
-    "google/gemini-2.5-pro",
-    "mistralai/mistral-nemo",
     "nousresearch/hermes-3-llama-3.1-405b",
 ]
 
@@ -103,82 +153,16 @@ if not usuario_atual:
     st.info("Defina o usuário e clique em **Usar este usuário**.")
 else:
     st.success(f"Usuário ativo: **{usuario_atual}**")
-
-# --- Inicializa Janio como parceiro canônico assim que houver usuário ativo ---
-if usuario_atual and mu is not None:
-    try:
-        # Define Janio como parceiro_atual e registra primeiro encontro (idempotente)
-        ensure_janio_context(
-            usuario_atual,
-            registrar_primeiro_encontro=True,
-            registrar_primeira_vez=False  # deixe False; mude para True só quando quiser liberar NSFW total
-        )
-    except Exception as e:
-        st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
-# --- Inicializa Janio como parceiro canônico assim que houver usuário ativo ---
-if usuario_atual and mu is not None:
-    try:
-        # Define Janio como parceiro_atual e registra primeiro encontro (idempotente)
-        ensure_janio_context(
-            usuario_atual,
-            registrar_primeiro_encontro=True,
-            registrar_primeira_vez=False  # deixe False; mude para True só quando quiser liberar NSFW total
-        )
-    except Exception as e:
-        st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
-
-
-
-# --- Inicialização canônica de Janio como parceiro da Mary ---
-def ensure_janio_context(usuario: str,
-                         registrar_primeiro_encontro: bool = True,
-                         registrar_primeira_vez: bool = False):
-    """
-    Garante que Janio esteja definido como parceiro atual e (opcionalmente)
-    registra primeiro encontro e/ou primeira_vez se ainda não existirem.
-    """
-    try:
-        from datetime import datetime
-        import mongo_utils as mu
-    except Exception:
-        return  # se der erro de import, apenas não faz nada
-
-    # 1) parceiro_atual = Janio (idempotente)
-    fatos = mu.get_fatos(usuario) or {}
-    if fatos.get("parceiro_atual") != "Janio":
-        mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
-
-    # 2) primeiro_encontro (opcional e idempotente)
-    if registrar_primeiro_encontro:
-        ev = mu.ultimo_evento(usuario, "primeiro_encontro")
-        if not ev:
-            mu.registrar_evento(
-                usuario=usuario,
-                tipo="primeiro_encontro",
-                descricao="Mary e Janio se conheceram oficialmente.",
-                local="praia de Camburi",
-                data_hora=datetime.utcnow(),
-                tags=["primeiro_contato"]
+    # --- Inicializa Janio como parceiro canônico assim que houver usuário ativo ---
+    if mu is not None:
+        try:
+            ensure_janio_context(
+                usuario_atual,
+                registrar_primeiro_encontro=True,
+                registrar_primeira_vez=False  # mude para True quando quiser liberar NSFW total
             )
-            # espelha também como fato breve (ajuda resumos)
-            mu.set_fato(usuario, "primeiro_encontro", "Janio - Praia de Camburi",
-                        meta={"fonte": "auto-init"})
-
-    # 3) primeira_vez (opcional; só use quando quiser liberar NSFW total)
-    if registrar_primeira_vez:
-        ev_pv = mu.ultimo_evento(usuario, "primeira_vez")
-        if not ev_pv:
-            mu.registrar_evento(
-                usuario=usuario,
-                tipo="primeira_vez",
-                descricao="Mary e Janio tiveram sua primeira vez.",
-                local="motel status",
-                data_hora=datetime.utcnow(),
-                tags=["nsfw_liberado"]
-            )
-            # Se você também usa um fato 'virgem', pode atualizá-lo:
-            mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
-
+        except Exception as e:
+            st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
 
 # ==== Memória Canônica (manual) ====
 st.sidebar.markdown("---")
