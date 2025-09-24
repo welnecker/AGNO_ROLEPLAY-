@@ -447,13 +447,65 @@ def _detecta_coadjuvante_irregular(txt: str) -> bool:
         txt, re.IGNORECASE
     ))
 
-# ---- Stubs úteis: não quebram se não quiser usar esses filtros agora
 def _garante_decisao_convite(prompt_usuario: str, resposta: str) -> str:
-    """Se o usuário faz convite e a resposta não aceita/recusa nem propõe local público, adiciona um fecho educado."""
-    if re.search(r"\b(café|cafeteria|praia|encontro|sair|ver\s?voc[eê]|ver\s?vc|conversa particular|vamos)\b", (prompt_usuario or ""), re.IGNORECASE):
-        if not re.search(r"\b(aceito|topo|pode ser|prefiro|melhor|hoje n[aã]o|talvez outro dia|Cafeteria Oregon|Posto 6)\b", (resposta or ""), re.IGNORECASE):
-            return (resposta or "").rstrip() + "\n\nPodemos manter público: **Cafeteria Oregon** ou **Posto 6**. O que acha?"
-    return resposta
+    """
+    Se o usuário faz um convite e a resposta não aceita/recusa nem propõe local público,
+    adiciona um fecho curto e variado (locais públicos canônicos).
+    - Evita repetir se já houver decisão/local.
+    - Escolhe variação por hash do prompt (para não ficar sempre igual).
+    """
+    pu = (prompt_usuario or "")
+    rs = (resposta or "")
+
+    # 1) Há convite?
+    tem_convite = bool(re.search(
+        r"\b(caf[eé]|cafeteria|praia|encontro|sair|convid[oae]?|ver\s?voc[eê]|ver\s?vc|conversa\s+particular|vamos|bora)\b",
+        pu, re.IGNORECASE
+    ))
+    if not tem_convite:
+        return rs
+
+    # 2) Já há decisão explícita ou local público na resposta?
+    ja_decidiu = bool(re.search(
+        r"\b(aceito|topo|combinado|fechado|pode\s+ser|prefiro|melhor\s+(amanh[aã]|depois)|hoje\s+n[aã]o|talvez\s+outro\s+dia|vou\s+agendar|mais\s+tarde)\b",
+        rs, re.IGNORECASE
+    ))
+
+    locais_publicos = [
+        "Cafeteria Oregon", "Quiosque Posto 6", "Praia de Camburi",
+        "Clube Náutico", "Enseada do Suá", "Restaurante Partido Alto"
+    ]
+    tem_local = any(re.search(rf"\b{re.escape(lp)}\b", rs, re.IGNORECASE) for lp in locais_publicos)
+
+    if ja_decidiu or tem_local:
+        return rs  # nada a fazer
+
+    # 3) Monta variação leve (sem repetir sempre a mesma frase)
+    #    Usa hash do prompt para escolher a variação
+    h = abs(hash(pu)) % 6
+    sugestoes = [
+        "Que tal manter público e simples no **Cafeteria Oregon**?",
+        "A gente pode conversar melhor no **Quiosque Posto 6**.",
+        "Prefiro algo aberto: **Praia de Camburi** numa caminhada curta.",
+        "Se quiser música e movimento, **Clube Náutico** funciona.",
+        "Podemos marcar na **Enseada do Suá** mais tarde.",
+        "Se for almoço/jantar, **Restaurante Partido Alto** é uma boa."
+    ]
+    fechos = [
+        "O que acha?",
+        "Te serve?",
+        "Topa assim?",
+        "Faz sentido pra você?",
+        "Curte a ideia?",
+        "Se preferir, sugerimos outro."
+    ]
+    linha = f"{sugestoes[h]} {fechos[h]}"
+
+    # 4) Evita duplicar se resposta já terminar com pergunta/fecho
+    if re.search(r"[?!]\s*$", rs.strip()):
+        return rs.strip() + " " + linha
+    return (rs.rstrip() + "\n\n" + linha).strip()
+
 
 def _remove_falas_do_usuario_inventadas(resposta: str) -> str:
     """No-op suave: deixa como está (evita remover falas de Mary)."""
