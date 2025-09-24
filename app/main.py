@@ -568,26 +568,20 @@ with chat:
 # ===== Input fixo no rodapé =====
 
 def aplicar_restricoes(prompt_usuario: str, liberar_nsfw: bool) -> str:
-    """Prefixa instruções fortes conforme o gate NSFW."""
-    if liberar_nsfw:
-        prefix = (
-            "[MODO_NSF W_LIBERADO]
-"
-            "Siga um tom sensual adulto quando apropriado, mas SEM conteúdo ilegal, sem menores, sem incesto, sem violência sexual, sem bestialidade.
-"
-            "Respeite consentimento, segurança e bom gosto. Evite descrições gráficas excessivas; foque em química, emoção e diálogo natural.
-"
-        )
-    else:
-        prefix = (
-            "[MODO_SEGURO]
-"
-            "Responda em tom romântico/afetivo leve, SEM cenas sexuais explícitas.
-"
-            "Foque em flerte sutil, treino, cotidiano, emoções e diálogo respeitoso.
-"
-        )
-    return f"{prefix}
+"""Prefixa instruções conforme o gate NSFW, sem erros de string."""
+if liberar_nsfw:
+prefix = (
+"[MODO_NSFW_LIBERADO]\n"
+"Siga um tom sensual adulto quando apropriado, mas SEM conteúdo ilegal, sem menores, sem incesto, sem violência sexual, sem bestialidade.\n"
+"Respeite consentimento, segurança e bom gosto. Evite descrições gráficas excessivas; foque em química, emoção e diálogo natural.\n"
+)
+else:
+prefix = (
+"[MODO_SEGURO]\n"
+"Responda em tom romântico/afetivo leve, SEM cenas sexuais explícitas.\n"
+"Foque em flerte sutil, treino, cotidiano, emoções e diálogo respeitoso.\n"
+)
+return prefix + "\n\n" + (prompt_usuario or "")
 {prompt_usuario}"
 
 if usuario_atual:
