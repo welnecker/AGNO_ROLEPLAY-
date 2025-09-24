@@ -412,12 +412,13 @@ def _injeta_traco(par: str, idx: int) -> str:
 
 
 def _realoca_foco_humano(par: str) -> str:
-    if _INANIMADOS.search(par) and not _paragrafo_tem_sensacao_humana(par):
-        par = par.strip() + " Sinto o calor da sua pele e o meu peito acelerar."
     return par
 
 
 def _fix_sensory_and_traits(texto: str) -> str:
+    # Desativado: não injeta traços quando a lista estiver vazia
+    if not _SENSORY_TRAITS:
+        return texto
     pars = [p for p in re.split(r"\n\s*\n", texto) if p.strip()]
     out = []
     idx = 0
