@@ -322,6 +322,61 @@ _RE_NEGAR_UFES = re.compile(r"\bn[ãa]o estudo\b.*UFES", re.IGNORECASE)
 _SEXO_REGEX = re.compile(r"\b(beijo(s|u)?|beijando|beijar|amasso|carícia(s)?|carinh(o|os)|gem(e|idos?)|tes[aã]o|gozar|gozo|tesud[ao]|penetra(r|ção|ndo)|meter|cavalgar|chupar|oral|lamber|morder orelha|pescoço|mamilos?|seios?|bunda|bumbum|coxas?|goza(r|ndo)?\b|est[aá]\s*molhad[ao]|duro|ere[çc][aã]o)\b", re.IGNORECASE)
 _NOMES_MASCULINOS_COMUNS = re.compile(r"\b(heitor|leandro|ricardo|pedro|lu[ií]s|jo[aã]o|marcos?|carlos?|and(r[eé]|\w+)|bruno|lucas|rafael|felipe|thiago|tiago)\b", re.IGNORECASE)
 
+# ——— Corta cacoetes e metacena ———
+_BORDOES = [
+    r"\bmeus?\s+cabelos?\s+negros?(?:\s+e)?\s+volumosos?\b",
+    r"\bmeus?\s+olhos?\s+verdes\b",
+    r"\bmordo\s+o\s+l[aá]bio\b",
+    r"\brisadinh[ao]?\b",
+    r"\bbeicinh[ao]?\b",
+    r"\bvoz\s+mais\s+suave\b",
+    r"\bsorriso\s+bobo\b",
+]
+
+def _strip_bordoes(txt: str) -> str:
+    out = txt
+    for pat in _BORDOES:
+        out = re.sub(pat, "", out, flags=re.IGNORECASE)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    out = re.sub(r"\s+([,.;!?])", r"\1", out)
+    return out
+
+def _strip_metacena(txt: str) -> str:
+    # remove parênteses/colchetes no início de linha (ex.: "(Aproximo...)", "[sorrio]")
+    linhas = []
+    for ln in txt.splitlines():
+        ln2 = re.sub(r"^[\(\[][^\)\]]*[\)\]]\s*", "", ln.strip())
+        linhas.append(ln2)
+    return "\n".join(linhas)
+
+# ——— Trava praia x academia ———
+_TOKENS_PRAIA = {
+    r"areia", r"mar", r"ondas?", r"guarda-?sol", r"quiosque", r"coco",
+    r"biqu[ií]ni", r"sunga", r"brisa", r"toalha", r"barraca"
+}
+_TOKENS_ACADEMIA = {
+    r"halter(es)?", r"barra", r"anilha", r"aparelho", r"m[aá]quina", r"esteira",
+    r"agachamento", r"repeti[cç][aã]o", r"s[eé]rie", r"rack", r"supino", r"gl[uú]teo"
+}
+
+def _limpa_mistura_ambiente(txt: str, local_norm: str) -> str:
+    if not local_norm:
+        return txt
+    sent = re.split(r"(?<=[.!?])\s+", txt)
+    keep = []
+    if "praia" in local_norm:
+        ban = _TOKENS_ACADEMIA
+    elif "academia" in local_norm or "fisium" in local_norm:
+        ban = _TOKENS_PRAIA
+    else:
+        ban = set()
+    for s in sent:
+        s_low = s.lower()
+        if any(re.search(rf"\b{w}\b", s_low) for w in ban):
+            continue
+        keep.append(s)
+    return " ".join(keep)
+
 
 def _violou_virgindade(usuario: str, txt: str) -> bool:
     if ultimo_evento(usuario, "primeira_vez"):
@@ -617,9 +672,12 @@ def gerar_resposta_openrouter(
         [
             {"role": "system", "content": PERSONA_MARY},
             partner_msg,
-            {"role": "system", "content": (
-                "Estilo: 3–6 parágrafos; 2–4 frases; romântico e direto; sem metáforas acadêmicas. Evite bordões e não obrigue menções físicas em todo parágrafo. Respeite 'primeira_vez' e 'virgem'."
-            )},
+           {"role": "system", "content": (
+            "ESTILO: adulto e direto. Frases curtas (5–14 palavras). Sem parênteses de metacena. "
+            "Nada de diminutivos (risadinha, beicinho). Verbo forte, menos floreio. "
+            "Desejo explícito com classe. Mantenha coerência estrita com o local atual."
+        )},
+
         ]
         + nsfw_msgs
         + ([fase_msg] if fase_msg else [])
@@ -650,13 +708,13 @@ def gerar_resposta_openrouter(
         data = _post_openrouter(payload, timeout=120, max_retries=1)
         resposta = data["choices"][0]["message"]["content"]
 
-    # Pós-processamentos (tolerantes a erro)
+       # Pós-processamentos (tolerantes a erro)
     try:
+        resposta = _strip_metacena(resposta)
+        resposta = _strip_bordoes(resposta)
         resposta = _sanitize_locais_na_saida(usuario, resposta)
-    except Exception:
-        pass
-    try:
-        resposta = _fix_sensory_and_traits(resposta)
+        resposta = _limpa_mistura_ambiente(resposta, _local_preferido(usuario))
+        resposta = _fix_sensory_and_traits(resposta)  # no-op, deixa explícito
     except Exception:
         pass
 
@@ -678,6 +736,17 @@ def gerar_resposta_openrouter(
             resposta = data2["choices"][0]["message"]["content"]
         except Exception:
             pass
+
+        # Pós-processamentos (tolerantes a erro)
+        try:
+            resposta = _strip_metacena(resposta)
+            resposta = _strip_bordoes(resposta)
+            resposta = _sanitize_locais_na_saida(usuario, resposta)
+            resposta = _limpa_mistura_ambiente(resposta, _local_preferido(usuario))
+            resposta = _fix_sensory_and_traits(resposta)  # no-op, deixa explícito
+        except Exception:
+            pass
+
         else:
             try:
                 resposta = _sanitize_locais_na_saida(usuario, resposta)
