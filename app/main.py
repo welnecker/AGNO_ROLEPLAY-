@@ -1,7 +1,15 @@
 # app/main.py
 import re
+import hashlib
 import streamlit as st
 from datetime import datetime
+
+# Fuso horário (America/Sao_Paulo)
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+    TZ = ZoneInfo("America/Sao_Paulo")
+except Exception:  # fallback
+    TZ = None
 
 # Import protegido do mongo_utils
 try:
@@ -13,7 +21,16 @@ except Exception as e:
 st.set_page_config(page_title="Roleplay | Mary Massariol", layout="centered")
 st.title("Roleplay | Mary Massariol")
 
-# --- Inicialização canônica de Janio como parceiro da Mary ---
+# --- Helpers de tempo/ids ---
+def _now_iso():
+    dt = datetime.now(TZ) if TZ else datetime.utcnow()
+    return dt.isoformat()
+
+def _event_id(usuario: str, tipo: str, descricao: str) -> str:
+    raw = f"{usuario}|{tipo}|{descricao}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
 def ensure_janio_context(
     usuario: str,
     registrar_primeiro_encontro: bool = True,
@@ -28,7 +45,6 @@ def ensure_janio_context(
       - (Opcional) semeia fatos estáveis de Janio (trabalho, moradia, etc.)
     """
     try:
-        from datetime import datetime
         import mongo_utils as mu  # usa o mesmo módulo já importado no app
 
         fatos = mu.get_fatos(usuario) or {}
@@ -57,13 +73,13 @@ def ensure_janio_context(
 
         # 1) parceiro_atual = Janio
         if fatos.get("parceiro_atual") != "Janio":
-            mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init"})
+            mu.set_fato(usuario, "parceiro_atual", "Janio", meta={"fonte": "auto-init", "ts": _now_iso()})
 
         # 2) semear fatos do Janio
         if seed_fatos:
             for chave, valor in defaults.items():
                 if fatos.get(chave) != valor:
-                    mu.set_fato(usuario, chave, valor, meta={"fonte": "auto-init"})
+                    mu.set_fato(usuario, chave, valor, meta={"fonte": "auto-init", "ts": _now_iso()})
 
         # 3) primeiro_encontro
         if registrar_primeiro_encontro:
@@ -74,14 +90,15 @@ def ensure_janio_context(
                     tipo="primeiro_encontro",
                     descricao="Mary e Janio se conheceram oficialmente.",
                     local="praia de Camburi",
-                    data_hora=datetime.utcnow(),
+                    data_hora=datetime.now(TZ) if TZ else datetime.utcnow(),
                     tags=["primeiro_contato"],
+                    meta={"origin": "auto-init"},
                 )
                 mu.set_fato(
                     usuario,
                     "primeiro_encontro",
                     "Janio - Praia de Camburi",
-                    meta={"fonte": "auto-init"},
+                    meta={"fonte": "auto-init", "ts": _now_iso()},
                 )
 
         # 4) primeira_vez
@@ -93,13 +110,15 @@ def ensure_janio_context(
                     tipo="primeira_vez",
                     descricao="Mary e Janio tiveram sua primeira vez.",
                     local="motel status",
-                    data_hora=datetime.utcnow(),
+                    data_hora=datetime.now(TZ) if TZ else datetime.utcnow(),
                     tags=["nsfw_liberado"],
+                    meta={"origin": "auto-init"},
                 )
-                mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init"})
+                mu.set_fato(usuario, "virgem", False, meta={"fonte": "auto-init", "ts": _now_iso()})
 
     except Exception as e:
         st.warning(f"Não foi possível inicializar o contexto do Janio: {e}")
+
 
 # ==== Seletor de modelo (OpenRouter) ====
 st.session_state.setdefault("modelo_escolhido", "deepseek/deepseek-chat-v3-0324")
@@ -196,6 +215,116 @@ else:
         registrar_primeira_vez=False  # mude para True quando quiser liberar NSFW total
     )
 
+# ===== Status íntimo / NSFW toggle =====
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔓 Status íntimo")
+
+# Estado volátil para anti-rerun
+st.session_state.setdefault("virgindade_estado_inicial", None)
+st.session_state.setdefault("virgindade_ja_processado", False)
+
+
+def registrar_primeira_vez_se_preciso(mu_mod, usuario: str):
+    """Garante evento canônico 'primeira_vez' apenas uma vez."""
+    descricao = "Mary e Janio tiveram sua primeira vez."
+    if hasattr(mu_mod, "ultimo_evento") and not mu_mod.ultimo_evento(usuario, "primeira_vez"):
+        mu_mod.registrar_evento(
+            usuario=usuario,
+            tipo="primeira_vez",
+            descricao=descricao,
+            local="motel status",
+            data_hora=datetime.now(TZ) if TZ else datetime.utcnow(),
+            tags=["nsfw_liberado"],
+            meta={"id": _event_id(usuario, "primeira_vez", descricao), "origin": "sidebar"},
+        )
+
+if usuario_atual and mu is not None:
+    try:
+        virgem_atual = bool(mu.get_fato(usuario_atual, "virgem", True))
+    except Exception:
+        virgem_atual = True
+
+    if st.session_state["virgindade_estado_inicial"] is None:
+        st.session_state["virgindade_estado_inicial"] = virgem_atual
+
+    marcado = st.sidebar.checkbox(
+        "Mary **NÃO** é mais virgem (libera cenas NSFW)",
+        value=(not virgem_atual),
+        help="Se marcado, grava virgem=False e registra o evento canônico 'primeira_vez' (se ainda não existir).",
+    )
+
+    colA, colB = st.sidebar.columns(2)
+    salvar = colA.button("💾 Salvar")
+    desfazer = colB.button("↩️ Desfazer")
+
+    if salvar and not st.session_state["virgindade_ja_processado"]:
+        try:
+            if marcado and virgem_atual:
+                mu.set_fato(
+                    usuario_atual,
+                    "virgem",
+                    False,
+                    meta={"fonte": "sidebar", "ts": _now_iso()},
+                )
+                registrar_primeira_vez_se_preciso(mu, usuario_atual)
+                st.sidebar.success("Salvo: Mary não é mais virgem. NSFW liberado.")
+                st.session_state["virgindade_ja_processado"] = True
+
+            elif not marcado and (not virgem_atual):
+                mu.set_fato(
+                    usuario_atual,
+                    "virgem",
+                    True,
+                    meta={"fonte": "sidebar", "ts": _now_iso(), "manual_reset": True},
+                )
+                st.sidebar.info("Status redefinido para virgem=True (manual).")
+                st.session_state["virgindade_ja_processado"] = True
+            else:
+                st.sidebar.warning("Nenhuma alteração detectada.")
+        except Exception as e:
+            st.sidebar.error(f"Falha ao salvar o status íntimo: {e}")
+
+    if desfazer:
+        try:
+            estado_inicial = st.session_state["virgindade_estado_inicial"]
+            mu.set_fato(
+                usuario_atual,
+                "virgem",
+                bool(estado_inicial),
+                meta={"fonte": "sidebar", "ts": _now_iso(), "undo": True},
+            )
+            st.sidebar.info("Status retornado ao estado inicial desta sessão.")
+            st.session_state["virgindade_ja_processado"] = False
+        except Exception as e:
+            st.sidebar.error(f"Falha ao desfazer: {e}")
+else:
+    st.sidebar.info("Selecione um usuário para ajustar o status íntimo.")
+
+# ===== Gate NSFW (leitura rápida + badge) =====
+def nsfw_liberado(usuario: str) -> bool:
+    if mu is None or not usuario:
+        return False
+    try:
+        virgem = bool(mu.get_fato(usuario, "virgem", True))
+    except Exception:
+        virgem = True
+    if not virgem:
+        return True
+    try:
+        ev = mu.ultimo_evento(usuario, "primeira_vez")
+        if ev:
+            return True
+    except Exception:
+        pass
+    return False
+
+# badge de status atual
+_nsfw_on = nsfw_liberado(usuario_atual)
+if usuario_atual:
+    st.sidebar.markdown(
+        f"**NSFW:** {'✅ Liberado' if _nsfw_on else '🔒 Bloqueado'}"
+    )
+
 # ==== Memória Canônica (manual) ====
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Memória Canônica (manual)")
@@ -213,12 +342,12 @@ btn_disabled = (not bool(usuario_atual)) or (mu is None)
 if st.session_state.mem_tipo == "Fato":
     st.session_state.mem_chave = st.sidebar.text_input(
         "Chave do fato (ex.: primeiro_encontro, cidade_atual)",
-        value=st.session_state.mem_chave
+        value=st.session_state.mem_chave,
     )
     st.session_state.mem_valor = st.sidebar.text_area(
         "Valor do fato (ex.: Café Oregon)",
         value=st.session_state.mem_valor,
-        height=80
+        height=80,
     )
     colf1, colf2 = st.sidebar.columns(2)
     with colf1:
@@ -235,7 +364,7 @@ if st.session_state.mem_tipo == "Fato":
                             "atualizado_em": datetime.utcnow(),
                         }
                     },
-                    upsert=True
+                    upsert=True,
                 )
                 st.sidebar.success("Fato salvo!")
                 st.session_state.mem_chave = ""
@@ -250,17 +379,17 @@ if st.session_state.mem_tipo == "Fato":
 else:
     st.session_state.mem_chave = st.sidebar.text_input(
         "Tipo do evento (ex.: primeiro_encontro, primeira_vez, episodio_ciume_praia)",
-        value=st.session_state.mem_chave
+        value=st.session_state.mem_chave,
     )
     st.session_state.mem_valor = st.sidebar.text_area(
         "Descrição do evento (factual, curta)",
         value=st.session_state.mem_valor,
-        height=80
+        height=80,
     )
     st.session_state.mem_local = st.sidebar.text_input(
         "Local (opcional)",
         value=st.session_state.mem_local,
-        placeholder="Ex.: Café Oregon, Clube Serra Bella, Praia de Camburi"
+        placeholder="Ex.: Café Oregon, Clube Serra Bella, Praia de Camburi",
     )
     cole1, cole2 = st.sidebar.columns(2)
     with cole1:
@@ -268,14 +397,13 @@ else:
             if not usuario_atual or mu is None:
                 st.sidebar.warning("Escolha um usuário e verifique a conexão com o banco.")
             elif st.session_state.mem_chave.strip() and st.session_state.mem_valor.strip():
-                # Usa wrapper se existir; caso contrário, cai no registrar_evento simples
                 if hasattr(mu, "registrar_evento_canonico"):
                     mu.registrar_evento_canonico(
                         usuario=usuario_atual,
                         tipo=st.session_state.mem_chave.strip(),
                         descricao=st.session_state.mem_valor.strip(),
                         local=(st.session_state.mem_local.strip() or None),
-                        data_hora=datetime.utcnow(),
+                        data_hora=datetime.now(TZ) if TZ else datetime.utcnow(),
                         atualizar_fatos=True,
                     )
                 else:
@@ -284,7 +412,7 @@ else:
                         tipo=st.session_state.mem_chave.strip(),
                         descricao=st.session_state.mem_valor.strip(),
                         local=(st.session_state.mem_local.strip() or None),
-                        data_hora=datetime.utcnow()
+                        data_hora=datetime.now(TZ) if TZ else datetime.utcnow(),
                     )
                 st.sidebar.success("Evento salvo!")
                 st.session_state.mem_chave = ""
@@ -336,7 +464,7 @@ st.session_state.enredo_inicial = st.text_area(
     "📜 Enredo inicial",
     value=st.session_state.enredo_inicial,
     placeholder="Ex.: Mary encontra o usuário depois de um dia difícil...",
-    height=80
+    height=80,
 )
 
 # ===== Controles de memória do chat =====
@@ -369,7 +497,7 @@ if usuario_atual and st.session_state.enredo_inicial.strip() and not st.session_
     try:
         if mu.colecao.count_documents({
             "usuario": {"$regex": f"^{re.escape(usuario_atual)}$", "$options": "i"},
-            "mensagem_usuario": "__ENREDO_INICIAL__"
+            "mensagem_usuario": "__ENREDO_INICIAL__",
         }) == 0:
             mu.salvar_interacao(usuario_atual, "__ENREDO_INICIAL__", st.session_state.enredo_inicial.strip())
             st.session_state.enredo_publicado = True
@@ -438,14 +566,40 @@ with chat:
         i += 1
 
 # ===== Input fixo no rodapé =====
+
+def aplicar_restricoes(prompt_usuario: str, liberar_nsfw: bool) -> str:
+    """Prefixa instruções fortes conforme o gate NSFW."""
+    if liberar_nsfw:
+        prefix = (
+            "[MODO_NSF W_LIBERADO]
+"
+            "Siga um tom sensual adulto quando apropriado, mas SEM conteúdo ilegal, sem menores, sem incesto, sem violência sexual, sem bestialidade.
+"
+            "Respeite consentimento, segurança e bom gosto. Evite descrições gráficas excessivas; foque em química, emoção e diálogo natural.
+"
+        )
+    else:
+        prefix = (
+            "[MODO_SEGURO]
+"
+            "Responda em tom romântico/afetivo leve, SEM cenas sexuais explícitas.
+"
+            "Foque em flerte sutil, treino, cotidiano, emoções e diálogo respeitoso.
+"
+        )
+    return f"{prefix}
+{prompt_usuario}"
+
 if usuario_atual:
     if prompt := st.chat_input("Envie sua mensagem para Mary"):
         with st.chat_message("user"):
             st.markdown(prompt)
         try:
             if mu is not None:
+                liberar = nsfw_liberado(usuario_atual)
+                prompt_final = aplicar_restricoes(prompt, liberar)
                 resposta = mu.gerar_resposta_openrouter(
-                    prompt, usuario_atual, model=st.session_state.modelo_escolhido
+                    prompt_final, usuario_atual, model=st.session_state.modelo_escolhido
                 )
             else:
                 raise RuntimeError("mongo_utils indisponível — não foi possível gerar resposta.")
