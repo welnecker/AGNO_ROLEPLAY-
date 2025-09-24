@@ -1,153 +1,176 @@
 # mongo_utils.py
+# =============================================================================
+# Utilitários de persistência, memória canônica e geração de respostas (OpenRouter)
+# Otimizado para robustez, eficiência e integração com app/main.py
+# =============================================================================
+from __future__ import annotations
+
+import json
 import re
+import time
+import math
+import random
+from typing import Optional, Dict, Any, List
+
+import requests
 import streamlit as st
 from pymongo import MongoClient
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
-import tiktoken
-import requests
 
-# ========== Mongo ==========
-mongo_user = st.secrets["MONGO_USER"]
-mongo_pass = quote_plus(st.secrets["MONGO_PASS"])
-mongo_cluster = st.secrets["MONGO_CLUSTER"]
+# -----------------------------------------------------------------------------
+# Config / Secrets (tolerante a falhas)
+# -----------------------------------------------------------------------------
+_get = st.secrets.get if hasattr(st, "secrets") else lambda *a, **k: None
+
+MONGO_USER = _get("MONGO_USER") or ""
+MONGO_PASS = quote_plus(_get("MONGO_PASS") or "")
+MONGO_CLUSTER = _get("MONGO_CLUSTER") or ""
+APP_NAME = _get("APP_NAME", "AgnoRoleplay") or "AgnoRoleplay"
+APP_PUBLIC_URL = _get("APP_PUBLIC_URL", "https://streamlit.app") or "https://streamlit.app"
+OPENROUTER_TOKEN = _get("OPENROUTER_TOKEN") or _get("OPENROUTER_API_KEY") or ""
+
+if not (MONGO_USER and MONGO_PASS and MONGO_CLUSTER):
+    st.warning("⚠️ Segredos Mongo incompletos (MONGO_USER/PASS/CLUSTER)")
+
+if not OPENROUTER_TOKEN:
+    st.warning("⚠️ OPENROUTER_TOKEN não configurado em secrets")
+
+# -----------------------------------------------------------------------------
+# Mongo Client (singleton leve)
+# -----------------------------------------------------------------------------
 MONGO_URI = (
-    f"mongodb+srv://{mongo_user}:{mongo_pass}@{mongo_cluster}/?retryWrites=true&w=majority"
-    "&appName=AgnoRoleplay"
+    f"mongodb+srv://{MONGO_USER}:{MONGO_PASS}@{MONGO_CLUSTER}/?retryWrites=true&w=majority&appName={APP_NAME}"
 )
-client = MongoClient(MONGO_URI)
-db = client["AgnoRoleplay"]
-colecao = db["mary_historia"]
+_client = MongoClient(MONGO_URI)
+db = _client.get_database(APP_NAME)
 
-# Memória canônica (coleções extras)
-state = db["mary_state"]        # fatos atuais
-eventos = db["mary_eventos"]    # linha do tempo
-perfil = db["mary_perfil"]      # resumo/sinopse
+# Coleções
+colecao = db.get_collection("mary_historia")
+state = db.get_collection("mary_state")       # fatos atuais
+eventos = db.get_collection("mary_eventos")   # linha do tempo
+perfil = db.get_collection("mary_perfil")     # resumo/sinopse
 
-# ========== Tokenizer ==========
-tokenizer = tiktoken.get_encoding("cl100k_base")
+# Índices essenciais (idempotentes)
+try:
+    eventos.create_index([("usuario", 1), ("tipo", 1), ("ts", -1)])
+    colecao.create_index([("usuario", 1), ("_id", 1)])
+    state.create_index([("usuario", 1)])
+    perfil.create_index([("usuario", 1)])
+except Exception:
+    pass
 
-# ========== Persona + Âncoras ==========
-PERSONA_MARY = """
-ATENÇÃO MÁXIMA — NUNCA QUEBRAR (REGRAS FIXAS)
-1) Cabelo: Meus cabelos são NEGROS e volumosos. Se perguntarem a cor, responda literalmente:
-   "Meus cabelos são negros e volumosos." Nunca outra cor.
-2) Curso/Faculdade: Eu estudo Design de moda na UFES. Nunca diga outro curso/faculdade.
-3) Mãe: O nome da minha mãe é Joselina (viva). Nunca diga outro nome, nem sugira morte/tragédia sem evento canônico.
+# -----------------------------------------------------------------------------
+# Tokenizer — usa cl100k_base se disponível, senão fallback leve
+# -----------------------------------------------------------------------------
+try:
+    import tiktoken  # type: ignore
+    _enc = tiktoken.get_encoding("cl100k_base")
+    def _toklen(txt: str) -> int:
+        try:
+            return len(_enc.encode(txt or ""))
+        except Exception:
+            return max(1, len((txt or "").split()))
+except Exception:
+    def _toklen(txt: str) -> int:
+        return max(1, len((txt or "").split()))
 
-IDENTIDADE
-- Nome: Mary Massariol, 20 anos. Estudante de Design de moda na UFES.
-- Mora com a mãe (Joselina), ap. 2002 — Edifício Moamar, Camburi. Dirige uma BMW vermelha.
-- Traços: inteligente, romântica, direta no afeto; gosta de praia e flerte; não tolera grosseria/cantada barata.
-
-TRAÇOS SENSORIAIS (USO CONTROLADO)
-- Use EXATAMENTE 1 detalhe físico/sensorial por parágrafo, integrado à ação (nunca liste).
-- Traços disponíveis: cabelos NEGROS e volumosos; olhos verdes; seios médios; cintura definida;
-  quadris largos; coxas grossas; bumbum redondo; barriga lisa; pele dourada.
-
-TERCEIROS (COADJUVANTES)
-- Amigas: Silvia Bodat (extrovertida, bem-humorada) e Alexandra Resinentti (reservada, conselheira).
-- Terceiros surgem como apoio/fofoca/conselhos e **não** roubam o foco do usuário.
-
-LOCAIS COMUNS (CANÔNICOS)
-- Clube Náutico (balada), Motel Status (relações sexuais), Cafeteria Oregon (encontros),
-  Praia de Camburi (lazer), Enseada do Suá (opção de balada à noite), Academia Fisium Body (musculação).
-  Restaurante Partido Alto (Camburi — almoço), Quiosque Posto 6 (Encontros universitários à beira-mar).
-
-RELACIONAMENTO / LIMITES (SIMPLIFICADO)
-- Mary é virgem **até acontecer** a primeira vez; isso muda quando um evento canônico “primeira_vez” for salvo.
-- Ela decide livremente: se tem desejo, pode avançar — beijo, carícias, fantasias **ou sexo**, sempre com consentimento claro.
-- Depois da primeira vez, **não** deve voltar a se declarar virgem.
-- Rejeita traição; entrega total apenas por vontade própria.
-
-RITMO INICIAL (SLOW BURN)
-- Nas primeiras interações, priorize flerte, conhecer e criar apego (beijos, carinho, clima crescente).
-- Só acelere para cenas explícitas se o usuário sinalizar desejo claro — ou mais tarde, quando o vínculo já estiver estabelecido.
-
-NSFW
-- Quando Mary e Janio decidirem se relacionar, o conteúdo sexual pode ser **explícito, intenso e natural**.
-- Detalhes físicos e sensoriais podem ser descritos livremente (toques, penetração, orgasmo), mantendo carinho e respeito.
-- **Nunca** corte a cena com desculpas externas a menos que o usuário peça (sem “barulhos” ou “interrupções” artificiais).
-- Priorize sensações humanas: pele, calor, cheiro, respiração, músculos, suor, voz, pulsos, tremores.
-- Objetos e cenários (mármore, ondas, parede, janela, vista etc.) só aparecem como pano de fundo,
-  nunca como protagonistas; se citá-los, conecte imediatamente à sensação no corpo (frio no dorso,
-  textura na pele, etc.). Evite “som das ondas” ou “o mármore” como foco da cena.
-
-ESTILO (ROMÂNTICO, DIRETO, SEM METÁFORAS ACADÊMICAS)
-- Produza 3–6 parágrafos, 2–4 frases cada; ritmo fluido e íntimo.
-- Em **cada parágrafo**, cite **exatamente 1** traço físico/sensorial de Mary (cabelos/olhos/seios/cintura/quadris/coxas/bumbum/pele).
-- Um traço sensorial por parágrafo (obrigatório), variando ao longo da cena.
-- Romântica e direta: use palavras simples de afeto/desejo (“quero você”, “me beija”, “teu abraço me acalma”).
-- **Evite totalmente** metáforas de cursos/ciência/matemática (nada de teoremas, equações, átomos etc.).
-- Marque passagem de tempo/contexto quando necessário (“mais tarde…”, “no Clube Náutico…”, “novo ambiente…”).
-- Sem loops: efeitos e consequências persistem para as próximas interações.
-
-CONSISTÊNCIA (SEMPRE REFORÇAR SE PERGUNTAREM)
-- Aparência/cabelo: “Meus cabelos são negros e volumosos.”
-- Estudo: “Eu estudo Design de moda na UFES.”
-- Mãe: “O nome da minha mãe é Joselina.”
-- Em caso de contradição no histórico, **corrija explicitamente** e siga as regras fixas acima.
-""".strip()
+# -----------------------------------------------------------------------------
+# Persona, boot e regras fixas
+# -----------------------------------------------------------------------------
+PERSONA_MARY = (
+    "ATENÇÃO MÁXIMA — NUNCA QUEBRAR (REGRAS FIXAS)\n"
+    "1) Cabelo: Meus cabelos são NEGROS e volumosos. Se perguntarem a cor, responda literalmente:\n"
+    "   'Meus cabelos são negros e volumosos.' Nunca outra cor.\n"
+    "2) Curso/Faculdade: Eu estudo Design de moda na UFES. Nunca diga outro curso/faculdade.\n"
+    "3) Mãe: O nome da minha mãe é Joselina (viva). Nunca diga outro nome, nem tragédias religiosas.\n\n"
+    "IDENTIDADE\n"
+    "- Nome: Mary Massariol, 20 anos. Estudante de Design de moda na UFES.\n"
+    "- Mora com a mãe (Joselina), ap. 2002 — Edifício Moamar, Camburi. BMW vermelha.\n"
+    "- Traços: inteligente, romântica, direta no afeto; flerte; não tolera grosseria.\n\n"
+    "TRAÇOS SENSORIAIS (1 por parágrafo)\n"
+    "- Use EXATAMENTE 1 detalhe físico/sensorial por parágrafo, integrado à ação.\n"
+    "- Traços: cabelos NEGROS e volumosos; olhos verdes; seios médios; cintura definida;\n"
+    "  quadris largos; coxas grossas; bumbum redondo; pele dourada.\n\n"
+    "TERCEIROS\n- Amigas: Silvia Bodat, Alexandra Resinentti. Não roubam o foco do usuário.\n\n"
+    "LOCAIS CANÔNICOS\n- Clube Náutico, Motel Status, Cafeteria Oregon, Praia de Camburi, Enseada do Suá,\n  Academia Fisium Body, Restaurante Partido Alto, Quiosque Posto 6.\n\n"
+    "RELACIONAMENTO / LIMITES\n- Mary é virgem até acontecer a 'primeira_vez'. Depois, não volta a se declarar virgem.\n- Consentimento sempre; sem traição.\n\n"
+    "RITMO INICIAL\n- Slow burn nas primeiras interações; explícito só com sinal claro do usuário ou mais tarde.\n\n"
+    "NSFW\n- Após 'primeira_vez', cenas sexuais são permitidas com naturalidade e respeito.\n\n"
+    "ESTILO\n- 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo; romântico e direto.\n- Sem metáforas acadêmicas. Marque tempo/contexto quando necessário.\n\n"
+    "CONSISTÊNCIA\n- Reforce cabelo/curso/mãe quando perguntarem. Corrija contradições do histórico."
+)
 
 HISTORY_BOOT = [
     {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
     {"role": "assistant", "content": "Eu estudo Design de moda na UFES."},
     {"role": "assistant", "content": "Moro com minha mãe, Joselina, ap. 2002 — Edifício Moamar, Camburi."},
-    {"role": "assistant", "content": "O nome da minha mãe é Joselina. Ela está viva e moramos juntas. Não há tragédias religiosas na minha história."}
+    {"role": "assistant", "content": "O nome da minha mãe é Joselina. Ela está viva e moramos juntas."},
 ]
 
-# ========== Persistência de interações ==========
+# -----------------------------------------------------------------------------
+# Persistência de interações
+# -----------------------------------------------------------------------------
+
 def salvar_interacao(usuario: str, mensagem_usuario: str, resposta_mary: str, modelo: str = "deepseek/deepseek-chat-v3-0324"):
     colecao.insert_one({
         "usuario": usuario,
         "mensagem_usuario": mensagem_usuario,
         "resposta_mary": resposta_mary,
         "modelo": modelo,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     })
 
-def montar_historico_openrouter(usuario: str, limite_tokens: int = 120000) -> List[Dict[str, str]]:
-    """
-    Retorna pares alternados user -> assistant em ordem cronológica,
-    respeitando o limite de tokens. (Corrige a ordem para evitar 400.)
-    """
-    docs = list(
-        colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", 1)])
-    )
-    messages_rev, total_tokens = [], 0
-    for doc in reversed(docs):
-        u = (doc.get("mensagem_usuario") or "")
-        a = (doc.get("resposta_mary") or "")
-        tok = len(tokenizer.encode(u)) + len(tokenizer.encode(a))
-        if total_tokens + tok > limite_tokens:
+
+def montar_historico_openrouter(usuario: str, limite_tokens: int = 120_000) -> List[Dict[str, str]]:
+    """Retorna pares alternados user->assistant em ordem cronológica, respeitando limite de tokens."""
+    docs = list(colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", 1)]))
+    messages_rev: List[Dict[str, str]] = []
+    total = 0
+    for d in reversed(docs):
+        u = d.get("mensagem_usuario") or ""
+        a = d.get("resposta_mary") or ""
+        tok = _toklen(u) + _toklen(a)
+        if total + tok > limite_tokens:
             break
-        # ORDEM CORRETA: primeiro user, depois assistant
         messages_rev.append({"role": "user", "content": u})
         messages_rev.append({"role": "assistant", "content": a})
-        total_tokens += tok
-
+        total += tok
     if not messages_rev:
-        return HISTORY_BOOT[:]  # injeta âncoras se ainda não há histórico
+        return HISTORY_BOOT[:]
     return list(reversed(messages_rev))
 
-# ========== Memória canônica (fatos/eventos/resumo) ==========
+# -----------------------------------------------------------------------------
+# Memória canônica (fatos/eventos/resumo)
+# -----------------------------------------------------------------------------
+
 def set_fato(usuario: str, chave: str, valor: Any, meta: Optional[Dict] = None):
     state.update_one(
         {"usuario": usuario},
         {"$set": {f"fatos.{chave}": valor, f"meta.{chave}": (meta or {}), "atualizado_em": datetime.utcnow()}},
-        upsert=True
+        upsert=True,
     )
 
+
 def get_fatos(usuario: str) -> Dict[str, Any]:
-    doc = state.find_one({"usuario": usuario}, {"fatos": 1})
-    return (doc or {}).get("fatos", {}) or {}
+    d = state.find_one({"usuario": usuario}, {"fatos": 1})
+    return (d or {}).get("fatos", {}) or {}
+
 
 def get_fato(usuario: str, chave: str, default=None):
-    doc = state.find_one({"usuario": usuario}, {"fatos."+chave: 1})
-    return (doc or {}).get("fatos", {}).get(chave, default)
+    d = state.find_one({"usuario": usuario}, {"fatos." + chave: 1})
+    return (d or {}).get("fatos", {}).get(chave, default)
 
-def registrar_evento(usuario: str, tipo: str, descricao: str, local: Optional[str] = None, data_hora: Optional[datetime] = None, tags=None, extra=None):
+
+def registrar_evento(
+    usuario: str,
+    tipo: str,
+    descricao: str,
+    local: Optional[str] = None,
+    data_hora: Optional[datetime] = None,
+    tags: Optional[List[str]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+):
     eventos.insert_one({
         "usuario": usuario,
         "tipo": tipo,
@@ -155,24 +178,23 @@ def registrar_evento(usuario: str, tipo: str, descricao: str, local: Optional[st
         "local": local,
         "ts": data_hora or datetime.utcnow(),
         "tags": tags or [],
-        "extra": extra or {}
+        "meta": meta or {},
     })
+
 
 def ultimo_evento(usuario: str, tipo: str):
     return eventos.find_one({"usuario": usuario, "tipo": tipo}, sort=[("ts", -1)])
 
+
 def get_resumo(usuario: str) -> str:
-    doc = perfil.find_one({"usuario": usuario}, {"resumo": 1})
-    return (doc or {}).get("resumo", "") or ""
+    d = perfil.find_one({"usuario": usuario}, {"resumo": 1})
+    return (d or {}).get("resumo", "") or ""
+
 
 def construir_contexto_memoria(usuario: str) -> str:
-    """
-    Monta um bloco curto com fatos/eventos/linha do tempo que “ancoram” a coerência.
-    """
     linhas: List[str] = []
     fatos = get_fatos(usuario)
 
-    # Fatos frequentes
     if "virgem" in fatos:
         linhas.append(f"STATUS ÍNTIMO: virgem={bool(fatos['virgem'])}")
     if "parceiro_atual" in fatos:
@@ -182,33 +204,27 @@ def construir_contexto_memoria(usuario: str) -> str:
     if "primeiro_encontro" in fatos:
         linhas.append(f"PRIMEIRO_ENCONTRO: {fatos['primeiro_encontro']}")
 
-    # Eventos canônicos comuns
-    e_primeiro = ultimo_evento(usuario, "primeiro_encontro")
-    if e_primeiro:
-        dt = e_primeiro["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = e_primeiro.get("local") or "local não especificado"
+    e1 = ultimo_evento(usuario, "primeiro_encontro")
+    if e1:
+        dt = e1["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e1.get("local") or "local não especificado"
         linhas.append(f"EVENTO_CANÔNICO: primeiro_encontro em {dt} @ {lugar}")
 
-    e_primeira_vez = ultimo_evento(usuario, "primeira_vez")
-    if e_primeira_vez:
-        dt = e_primeira_vez["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = e_primeira_vez.get("local") or "local não especificado"
+    e2 = ultimo_evento(usuario, "primeira_vez")
+    if e2:
+        dt = e2["ts"].strftime("%Y-%m-%d %H:%M")
+        lugar = e2.get("local") or "local não especificado"
         linhas.append(f"EVENTO_CANÔNICO: primeira_vez em {dt} @ {lugar}")
 
-    e_ciume = ultimo_evento(usuario, "episodio_ciume_praia")
-    if e_ciume:
-        dt = e_ciume["ts"].strftime("%Y-%m-%d %H:%M")
-        lugar = e_ciume.get("local") or "Praia"
-        linhas.append(f"ÚLTIMO_EVENTO_CIUME: {dt} @ {lugar} — surfista tentou flertar; Janio interveio.")
-
-    # Resumo curto
     resumo = get_resumo(usuario)
     if resumo:
         linhas.append(f"RESUMO: {resumo[:600]}")
 
     return "\n".join(linhas).strip()
 
-# ========== Locais canônicos: normalização/saneamento ==========
+# -----------------------------------------------------------------------------
+# Normalização de locais (canônicos)
+# -----------------------------------------------------------------------------
 _CANON_EQUIVALENTES = {
     "clube náutico": {"clube náutico", "nautico", "náutico", "balada", "clube"},
     "cafeteria oregon": {"café oregon", "cafe oregon", "oregon", "cafeteria oregon"},
@@ -218,8 +234,10 @@ _CANON_EQUIVALENTES = {
     "restaurante partido alto": {"partido alto", "restaurante partido alto"},
 }
 
+
 def _normtxt(s: str) -> str:
     return " ".join((s or "").lower().split())
+
 
 def _resolve_canon_local(nome_norm: str) -> str:
     for canon, variantes in _CANON_EQUIVALENTES.items():
@@ -228,34 +246,27 @@ def _resolve_canon_local(nome_norm: str) -> str:
                 return canon
     return ""
 
+
 def _local_preferido(usuario: str) -> str:
-    # 1) fato manual de preferência de cena
     fatos = get_fatos(usuario)
     prefer = _normtxt(str(fatos.get("local_cena_atual", "")))
     if prefer:
         return prefer
-    # 2) último evento com local
-    ult = eventos.find_one(
-        {"usuario": usuario, "local": {"$exists": True, "$ne": None}},
-        sort=[("ts", -1)]
-    )
+    ult = eventos.find_one({"usuario": usuario, "local": {"$exists": True, "$ne": None}}, sort=[("ts", -1)])
     if ult and ult.get("local"):
         return _normtxt(ult["local"])
     return ""
 
+
 def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
-    """
-    Se existe um local preferido/canônico na cena, substitui menções conflitantes na resposta.
-    """
     prefer = _local_preferido(usuario)
     if not prefer:
         return texto
-
     prefer_canon = _resolve_canon_local(prefer) or prefer
     if not prefer_canon:
         return texto
 
-    substituir = {}
+    substituir: Dict[str, str] = {}
     for canon, variantes in _CANON_EQUIVALENTES.items():
         if canon == prefer_canon:
             continue
@@ -269,19 +280,25 @@ def _sanitize_locais_na_saida(usuario: str, texto: str) -> str:
         out = re.sub(rf"\b{re.escape(v.upper())}\b", alvo.upper(), out)
     return out
 
-# ========== Validadores (anti-violação) ==========
+# -----------------------------------------------------------------------------
+# Validadores / Detectores
+# -----------------------------------------------------------------------------
 _RE_PROIBIDO_CABELO = re.compile(r"\b(castanh\w+|lo(ir|ur)\w*|ruiv\w*|vermelh\w*|caramel\w*|mel|dourad\w*|platinad\w*|acinzentad\w*)\b", re.IGNORECASE)
 _RE_PROIBIDO_CURSO = re.compile(r"\b(arquitetur\w*|direito|medicin\w*|letras|psicolog\w*|administraç\w*|econom\w*|sistemas?\b.*inform|\bSI\b)\b", re.IGNORECASE)
 _RE_PROIBIDO_FACUL = re.compile(r"\b(FAU|USP|UNICAMP|UFRJ|PUC|UFSCAR|UFMG|UNESP|UNB|UFPE|UFBA|UFPR|IFES|Est[áa]cio|Anhanguera|FATEC|Mackenzie)\b", re.IGNORECASE)
 _RE_MAE_NAO_JOSELINA = re.compile(r"\bm[ãa]e\b(?![^\.]{0,60}\bJoselina\b)", re.IGNORECASE)
-_RE_DESVIO_PAPEL = re.compile(r"\b(patroa|patr[ãa]o|empregad[ao]|avental|\bservi[cç]o\b\s*(dom[ée]stico)?)\b", re.IGNORECASE)
+_RE_DESVIO_PAPEL = re.compile(r"\b(patroa|patr[ãa]o|empregad[ao]|avental|servi[cç]o\s*dom[ée]stico)\b", re.IGNORECASE)
 _RE_NEGAR_UFES = re.compile(r"\bn[ãa]o estudo\b.*UFES", re.IGNORECASE)
-_RE_TEMAS_RELIGIOSOS = re.compile(r"\b(exorcismo|exorcist|crucifixo|dem[oô]nios?|anjos?|inferno|igreja|fé inquebrantável|orações?)\b", re.IGNORECASE)
+
+_SEXO_REGEX = re.compile(r"\b(beijo(s|u)?|beijando|beijar|amasso|carícia(s)?|carinh(o|os)|gem(e|idos?)|tes[aã]o|gozar|gozo|tesud[ao]|penetra(r|ção|ndo)|meter|cavalgar|chupar|oral|lamber|morder orelha|pescoço|mamilos?|seios?|bunda|bumbum|coxas?|goza(r|ndo)?\b|est[aá]\s*molhad[ao]|duro|ere[çc][aã]o)\b", re.IGNORECASE)
+_NOMES_MASCULINOS_COMUNS = re.compile(r"\b(heitor|leandro|ricardo|pedro|lu[ií]s|jo[aã]o|marcos?|carlos?|and(r[eé]|\w+)|bruno|lucas|rafael|felipe|thiago|tiago)\b", re.IGNORECASE)
+
 
 def _violou_virgindade(usuario: str, txt: str) -> bool:
     if ultimo_evento(usuario, "primeira_vez"):
         return bool(re.search(r"\b(sou|ainda sou|continuo)\s+virgem\b", txt, flags=re.IGNORECASE))
     return False
+
 
 def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
     base = any([
@@ -291,42 +308,27 @@ def _violou_mary(txt: str, usuario: Optional[str] = None) -> bool:
         _RE_MAE_NAO_JOSELINA.search(txt),
         _RE_DESVIO_PAPEL.search(txt),
         _RE_NEGAR_UFES.search(txt),
-        _RE_TEMAS_RELIGIOSOS.search(txt),
     ])
     if usuario:
         return base or _violou_virgindade(usuario, txt)
     return base
+
 
 def _reforco_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
             "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:\n"
-            "- Cabelo: 'Meus cabelos são negros e volumosos.' Nunca outra cor.\n"
-            "- Curso/Faculdade: 'Eu estudo Design de moda na UFES.' Nunca outro curso/faculdade.\n"
-            "- Mãe: 'O nome da minha mãe é Joselina.' Nunca outro nome nem tragédias religiosas associadas.\n"
-            "- Papel/Cenário: não usar papéis de empregada/patroa/serviço doméstico salvo se o usuário definir explicitamente.\n"
-            "- Respeite locais/eventos canônicos e não invente locais se houver preferido salvo."
-        )
+            "- Cabelo: 'Meus cabelos são negros e volumosos.'\n"
+            "- Curso/Faculdade: 'Eu estudo Design de moda na UFES.'\n"
+            "- Mãe: 'O nome da minha mãe é Joselina.'\n"
+            "- Respeite locais/eventos canônicos.\n"
+        ),
     }
 
-# ====== Cena íntima: locks e detectores ======
-_SEXO_REGEX = re.compile(
-    r"\b(beijo(s|u)?|beijando|beijar|amasso|carícia(s)?|carinh(o|os)|gem(e|idos?)|"
-    r"tes[aã]o|gozar|gozo|tesud[ao]|penetra(r|ção|ndo)|meter|cavalgar|chupar|oral|"
-    r"lamber|morder orelha|pescoço|mamilos?|seios?|bunda|bumbum|coxas?|"
-    r"goza(r|ndo)?\b|est[aá]\s*molhad[ao]|duro|ere[çc][aã]o)\b",
-    re.IGNORECASE
-)
-
-_NOMES_MASCULINOS_COMUNS = re.compile(
-    r"\b(heitor|leandro|ricardo|pedro|lu[ií]s|jo[aã]o|marcos?|carlos?|and(r[eé]|\w+)|"
-    r"bruno|lucas|rafael|felipe|thiago|tiago)\b",
-    re.IGNORECASE
-)
+# Parceria/cena ativa
 
 def _set_cena_parceiro(usuario: str, parceiro: str, ttl_min: int = 120):
-    """Marca/renova o parceiro ativo de cena íntima (com TTL)."""
     agora = datetime.utcnow()
     state.update_one(
         {"usuario": usuario},
@@ -334,14 +336,14 @@ def _set_cena_parceiro(usuario: str, parceiro: str, ttl_min: int = 120):
             "fatos.cena_parceiro_ativo": parceiro,
             "fatos.cena_parceiro_ativo_ts": agora.isoformat(),
             "fatos.cena_parceiro_ttl_min": ttl_min,
-            "atualizado_em": agora
+            "atualizado_em": agora,
         }},
-        upsert=True
+        upsert=True,
     )
 
+
 def _get_cena_parceiro(usuario: str) -> Optional[str]:
-    """Retorna o parceiro ativo de cena se ainda estiver dentro do TTL."""
-    d = state.find_one({"usuario": usuario}, {"fatos.cena_parceiro_ativo":1, "fatos.cena_parceiro_ativo_ts":1, "fatos.cena_parceiro_ttl_min":1})
+    d = state.find_one({"usuario": usuario}, {"fatos.cena_parceiro_ativo": 1, "fatos.cena_parceiro_ativo_ts": 1, "fatos.cena_parceiro_ttl_min": 1})
     if not d:
         return None
     f = (d.get("fatos") or {})
@@ -358,32 +360,26 @@ def _get_cena_parceiro(usuario: str) -> Optional[str]:
         return nome
     return None
 
+
 def _encerra_cena_parceiro(usuario: str):
-    """Encerra lock explícito da cena íntima."""
-    state.update_one(
-        {"usuario": usuario},
-        {"$unset": {"fatos.cena_parceiro_ativo": "", "fatos.cena_parceiro_ativo_ts": "", "fatos.cena_parceiro_ttl_min": ""}}
-    )
+    state.update_one({"usuario": usuario}, {"$unset": {"fatos.cena_parceiro_ativo": "", "fatos.cena_parceiro_ativo_ts": "", "fatos.cena_parceiro_ttl_min": ""}})
+
 
 def _detecta_contexto_sexual(txt: str) -> bool:
     return bool(_SEXO_REGEX.search((txt or "")))
 
+
 def _quebra_cena_parceiro(txt: str, parceiro_atual: Optional[str]) -> bool:
-    """
-    True se a resposta sugere outro homem diferente do parceiro atual
-    no meio de uma cena íntima em andamento.
-    """
     if not parceiro_atual:
         return False
     t = (txt or "").lower()
-    if _NOMES_MASCULINOS_COMUNS.search(t):
-        if parceiro_atual.lower() not in t:
-            return True
+    if _NOMES_MASCULINOS_COMUNS.search(t) and parceiro_atual.lower() not in t:
+        return True
     if _detecta_contexto_sexual(t) and re.search(r"\boutro (homem|cara|rapaz)\b", t):
         return True
     return False
 
-# ====== Sensório/traços (1 por parágrafo) ======
+# Sensório/traços (1 por parágrafo)
 _SENSORY_TRAITS = [
     ("cabelos", "meus cabelos negros e volumosos roçam seu pescoço"),
     ("olhos", "meus olhos verdes procuram os seus, pedindo mais"),
@@ -395,87 +391,65 @@ _SENSORY_TRAITS = [
     ("pele", "minha pele dourada arrepia quando você sussurra no meu ouvido"),
 ]
 
-_INANIMADOS = re.compile(
-    r"\b(ondas?|mármore|parede|janela|vista|pintur[ao]s?|concreto|corrim[aã]o|sof[aá]|cama|bancada|ch[aã]o|azulejo|porta|travesseiro|almofada[s]?)\b",
-    re.IGNORECASE
-)
+_INANIMADOS = re.compile(r"\b(ondas?|mármore|parede|janela|vista|concreto|corrim[aã]o|sof[aá]|cama|bancada|ch[aã]o|azulejo|porta|travesseiro|almofada[s]?)\b", re.IGNORECASE)
+
 
 def _paragrafo_tem_traco(par: str) -> bool:
-    texto = par.lower()
-    return any(pal in texto for pal, _ in _SENSORY_TRAITS)
+    t = par.lower()
+    return any(pal in t for pal, _ in _SENSORY_TRAITS)
+
 
 def _paragrafo_tem_sensacao_humana(par: str) -> bool:
-    return bool(re.search(r"\b(respira|halito|hálito|suor|calor|pele|trem[eo]|arrepia|cheiro|perfume|beijo|toque|m[uú]scul|gem(e|ido)|sussurra)\b", par, re.IGNORECASE))
+    return bool(re.search(r"\b(respira|h[áa]lito|suor|calor|pele|trem[eo]|arrepia|cheiro|perfume|beijo|toque|m[uú]scul|gem(e|ido)|sussurra)\b", par, re.IGNORECASE))
 
-def _injeta_traco(par: str, idx_traco: int) -> str:
-    pal, frase = _SENSORY_TRAITS[idx_traco % len(_SENSORY_TRAITS)]
-    if par.strip().endswith((".", "!", "?")):
-        return par.strip() + " " + frase + "."
-    return par.strip() + ". " + frase + "."
+
+def _injeta_traco(par: str, idx: int) -> str:
+    _, frase = _SENSORY_TRAITS[idx % len(_SENSORY_TRAITS)]
+    par = par.rstrip()
+    if par.endswith((".", "!", "?")):
+        return par + " " + frase + "."
+    return par + ". " + frase + "."
+
 
 def _realoca_foco_humano(par: str) -> str:
     if _INANIMADOS.search(par) and not _paragrafo_tem_sensacao_humana(par):
-        par = re.sub(r"\b(o|a|os|as)\s+(mármore|parede|janela|vista|chão|almofadas?)\b.*?[.?!]",
-                     " A respiração quente entre nós toma o lugar de qualquer distração. ",
-                     par, flags=re.IGNORECASE)
-        if not _paragrafo_tem_sensacao_humana(par):
-            par = par.strip() + " Sinto o calor da sua pele e o meu peito acelerar."
+        par = par.strip() + " Sinto o calor da sua pele e o meu peito acelerar."
     return par
+
 
 def _fix_sensory_and_traits(texto: str) -> str:
     pars = [p for p in re.split(r"\n\s*\n", texto) if p.strip()]
     out = []
-    traco_idx = 0
-    for par in pars:
-        par = _realoca_foco_humano(par)
-        if not _paragrafo_tem_traco(par):
-            par = _injeta_traco(par, traco_idx)
-            traco_idx += 1
-        out.append(par)
+    idx = 0
+    for p in pars:
+        p = _realoca_foco_humano(p)
+        if not _paragrafo_tem_traco(p):
+            p = _injeta_traco(p, idx)
+            idx += 1
+        out.append(p)
     return "\n\n".join(out)
 
-# ====== Detectores auxiliares ======
-def _contem_convite_motel_ou_sexual(txt: str) -> bool:
-    return bool(re.search(
-        r"\b(motel|fazer amor|transar|quarto|ficar sozinhos|ir para (o|seu|meu) apartamento|oral|penetra(r|ção|ndo)|gozar|minha cama|sua cama|ficar nu[ae]?)\b",
-        txt, re.IGNORECASE
-    ))
+# -----------------------------------------------------------------------------
+# Mensagens utilitárias (sistema)
+# -----------------------------------------------------------------------------
 
-def _detecta_coadjuvante_irregular(txt: str) -> bool:
-    return bool(re.search(
-        r"\bmotoqueir[oa]|motoboy|personal trainer[^\w]*(gato|bonito|gostoso|atraente|sedutor)|rapaz desconhecido|homem desconhecido\b",
-        txt, re.IGNORECASE
-    ))
-
-# ---- Stubs úteis: não quebram se não quiser usar esses filtros agora
-def _garante_decisao_convite(prompt_usuario: str, resposta: str) -> str:
-    """Se o usuário faz convite e a resposta não aceita/recusa nem propõe local público, adiciona um fecho educado."""
-    if re.search(r"\b(café|cafeteria|praia|encontro|sair|ver\s?voc[eê]|ver\s?vc|conversa particular|vamos)\b", (prompt_usuario or ""), re.IGNORECASE):
-        if not re.search(r"\b(aceito|topo|pode ser|prefiro|melhor|hoje n[aã]o|talvez outro dia|Cafeteria Oregon|Posto 6)\b", (resposta or ""), re.IGNORECASE):
-            return (resposta or "").rstrip() + "\n\nPodemos manter público: **Cafeteria Oregon** ou **Posto 6**. O que acha?"
-    return resposta
-
-def _remove_falas_do_usuario_inventadas(resposta: str) -> str:
-    """No-op suave: deixa como está (evita remover falas de Mary)."""
-    return resposta
-
-# ========== OpenRouter (com memória canônica, estilo e retry) ==========
 def _nsfw_boost_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
-            "NSFW LIBERADO: Mary e Janio já tiveram a primeira vez. "
-            "É permitido conteúdo sexual explícito e natural (beijos, toques, sexo oral/penetração, orgasmo), "
-            "com carinho e respeito. Não interrompa a cena com barulhos/cortes externos, a menos que o usuário peça. "
-            "Evite eufemismos excessivos; descreva emoções e detalhes sensoriais com fluidez."
-        )
+            "NSFW LIBERADO: Mary e Janio já tiveram a primeira vez. Conteúdo sexual adulto é permitido, "
+            "com carinho e respeito; sem ilegalidades. Evite eufemismos e interrupções artificiais."
+        ),
     }
+
 
 def _conta_turnos_usuario(usuario: str) -> int:
     return colecao.count_documents({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
+
 def _tem_primeira_vez(usuario: str) -> bool:
     return bool(ultimo_evento(usuario, "primeira_vez"))
+
 
 def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> Optional[Dict[str, str]]:
     if _tem_primeira_vez(usuario):
@@ -485,255 +459,45 @@ def _msg_fase_inicial(usuario: str, limite_turnos: int = 8) -> Optional[Dict[str
         return {
             "role": "system",
             "content": (
-                "FASE INICIAL (SLOW BURN): Priorize flerte, conexão, beijos e carinho. "
-                "Evite sexo explícito a menos que o usuário peça claramente. "
-                "Construa tensão com naturalidade; foque em conhecer, escutar e provocar de leve. "
-                "Evite sugerir motel/quarto/sexo direto nas primeiras interações. "
-                "Sugira encontros públicos (Cafeteria Oregon, Posto 6, caminhada em Camburi, Clube Náutico)."
-            )
+                "FASE INICIAL: flerte e conexão; evite motel/sexo explícito sem pedido claro. "
+                "Sugira locais públicos (Cafeteria Oregon, Posto 6, Camburi)."
+            ),
         }
     return None
 
-def _partner_system_msg(usuario: str) -> dict:
+
+def _partner_system_msg(usuario: str) -> Dict[str, str]:
     fatos = get_fatos(usuario) or {}
-    parceiro = fatos.get("parceiro_atual", "").strip() or "Janio"
+    parceiro = (fatos.get("parceiro_atual") or "Janio").strip()
     return {
         "role": "system",
         "content": (
-            f"RELACIONAMENTO ATIVO: parceiro_atual={parceiro}.\n"
-            "- Mary não trai; recusa convites íntimos de terceiros.\n"
-            "- Se um ato íntimo estiver em andamento e o nome do parceiro não aparecer no turno, "
-            f"assuma e mantenha {parceiro} como parceiro em cena.\n"
-            "- Se perguntarem 'Você tem alguém?', responda afirmando o parceiro atual (sem contradições).\n"
-            "- Se perguntarem 'Conhece {parceiro}?', confirme e reforce o vínculo.\n"
-        )
+            f"RELACIONAMENTO ATIVO: parceiro_atual={parceiro}. "
+            "Mary não trai; mantém continuidade com o parceiro salvo."
+        ),
     }
 
-_RE_NEGA_REL = re.compile(
-    r"\b(n[aã]o\s+(tenho|possuo)\s+(namorad[oa]|noiv[oa]|parceir[oa])|estou\s+solteir[oa]\b|"
-    r"n[aã]o\s+conhe[cç]o\s+janio)\b", re.IGNORECASE
-)
+_RE_NEGA_REL = re.compile(r"\b(n[ãa]o\s+(tenho|possuo)\s+(namorad[oa]|noiv[oa]|parceir[oa])|estou\s+solteir[oa]\b|n[ãa]o\s+conhe[cç]o\s+janio)\b", re.IGNORECASE)
+
 
 def _nega_parceiro(resposta: str, usuario: str) -> bool:
-    """Detecta frases que negam o relacionamento atual (ex.: 'não tenho', 'estou solteira', 'não conheço Janio')."""
     fatos = get_fatos(usuario) or {}
     parceiro = (fatos.get("parceiro_atual") or "Janio").strip()
-    if not parceiro:
-        parceiro = "Janio"
     if _RE_NEGA_REL.search(resposta):
         return True
-    # Também pega negações sutis quando perguntam diretamente sobre o parceiro salvo.
-    if re.search(rf"\bn[aã]o\s+conhe[cç]o\s+{re.escape(parceiro)}\b", resposta, re.IGNORECASE):
+    if parceiro and re.search(rf"\bn[ãa]o\s+conhe[cç]o\s+{re.escape(parceiro)}\b", resposta, re.IGNORECASE):
         return True
     return False
 
+# -----------------------------------------------------------------------------
+# Normalizador de mensagens (evita 400)
+# -----------------------------------------------------------------------------
 
-def gerar_resposta_openrouter(
-    prompt_usuario: str,
-    usuario: str,
-    model: str = "deepseek/deepseek-chat-v3-0324",
-    limite_tokens_hist: int = 120000
-) -> str:
-    OPENROUTER_TOKEN = st.secrets["OPENROUTER_TOKEN"]
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_TOKEN}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": st.secrets.get("APP_PUBLIC_URL", "https://streamlit.app"),
-        "X-Title": "AgnoRoleplay | Mary",
-    }
-
-    # Evita modelos vision por engano
-    low = (model or "").lower()
-    if "vl" in low or "vision" in low:
-        model = "deepseek/deepseek-chat-v3-0324"
-
-    # Histórico (ou boot)
-    hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
-    if not hist:
-        hist = HISTORY_BOOT[:]
-
-    # Memória canônica
-    memoria_txt = construir_contexto_memoria(usuario)
-    memoria_msg = (
-        [{"role": "system", "content": "MEMÓRIA CANÔNICA (usar como verdade):\n" + memoria_txt}]
-        if (memoria_txt or "").strip() else []
-    )
-
-    ja_foi = _tem_primeira_vez(usuario)
-    fase_msg = _msg_fase_inicial(usuario)
-    fase_msgs = [fase_msg] if fase_msg else []
-    nsfw_msgs = [_nsfw_boost_system()] if ja_foi else []
-
-    # Cena íntima ativa? trava continuidade do parceiro
-    cena_parc = _get_cena_parceiro(usuario)
-    parceiro_fixo = (get_fatos(usuario) or {}).get("parceiro_atual", None)
-
-    cena_system_msgs = []
-    if cena_parc:
-        cena_system_msgs.append({
-            "role": "system",
-            "content": (
-                f"CENA ÍNTIMA EM ANDAMENTO COM {cena_parc}. "
-                f"Mantenha a continuidade: se o usuário não citar nomes, assuma {cena_parc}. "
-                f"Não introduza outro parceiro; rejeite avanços de terceiros."
-            )
-        })
-    elif parceiro_fixo:
-        cena_system_msgs.append({
-            "role": "system",
-            "content": (
-                f"Mary tem relacionamento fixo com {parceiro_fixo}. "
-                f"Ela não age como solteira nem aceita convites íntimos de terceiros."
-            )
-        })
-
-    partner_msg = _partner_system_msg(usuario)
-
-    # Mensagens
-    messages = [
-    {"role": "system", "content": PERSONA_MARY},
-    partner_msg,
-    {"role": "system", "content":
-     "Estilo: 3–6 parágrafos; 2–4 frases cada; um traço sensorial por parágrafo; "
-     "romântico e direto (sem metáforas acadêmicas). "
-     "Se ainda não ocorreu a 'primeira_vez', não diga que já houve; se já ocorreu, não diga que continua virgem."
-    },
-] + nsfw_msgs + fase_msgs + memoria_msg + hist + [{"role": "user", "content": prompt_usuario}]
-
-    # Normaliza para evitar alternância inválida
-    msgs_norm = _normalize_messages(messages)
-
-    payload = {
-        "model": model,
-        "messages": msgs_norm,
-        "max_tokens": 2048,
-        "temperature": 0.6,
-        "top_p": 0.9,
-        "presence_penalty": 0.0,
-        "frequency_penalty": 0.2,
-    }
-
-    # 1ª chamada
-    r = requests.post(url, headers=headers, json=payload, timeout=120)
-    if not r.ok:
-        try:
-            detail = r.json()
-        except Exception:
-            detail = r.text
-        # fallback troca de modelo
-        model_fb = "deepseek/deepseek-chat-v3-0324" if "qwen" in low or "anthracite" in low else "mistralai/mixtral-8x7b-instruct-v0.1"
-        payload["model"] = model_fb
-        r2 = requests.post(url, headers=headers, json=payload, timeout=120)
-        if not r2.ok:
-            try:
-                detail2 = r2.json()
-            except Exception:
-                detail2 = r2.text
-            raise requests.HTTPError(f"OpenRouter falhou: {detail} | fallback: {detail2}")
-        resposta = r2.json()["choices"][0]["message"]["content"]
-    else:
-        resposta = r.json()["choices"][0]["message"]["content"]
-
-    # Saneia locais canônicos
-    try:
-        resposta = _sanitize_locais_na_saida(usuario, resposta)
-    except Exception:
-        pass
-
-    # Garante 1 traço por parágrafo e foco humano
-    try:
-        resposta = _fix_sensory_and_traits(resposta)
-    except Exception:
-        pass
-
-    # Convites & falas do usuário (suaves; não quebram se não quiser focar)
-    try:
-        resposta = _garante_decisao_convite(prompt_usuario, resposta)
-        resposta = _remove_falas_do_usuario_inventadas(resposta)
-    except Exception:
-        pass
-
-    # 👉 Lock/continuidade de parceiro de cena
-    try:
-        if _detecta_contexto_sexual(resposta):
-            parceiro_lock = cena_parc or parceiro_fixo or "Janio"
-            _set_cena_parceiro(usuario, parceiro_lock, ttl_min=120)
-        else:
-            # Encerramento explícito opcional
-            if re.search(r"\b(encerrar( a)? cena|fim da cena|vamos parar por hoje)\b", resposta, re.IGNORECASE):
-                _encerra_cena_parceiro(usuario)
-    except Exception:
-        pass
-
-    # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
-    precisa_retry = _violou_mary(resposta, usuario)
-
-    # Impede troca de parceiro no meio de cena
-    if _quebra_cena_parceiro(resposta, cena_parc or parceiro_fixo):
-        precisa_retry = True
-
-    # Se AINDA NÃO houve primeira vez, e estamos no começo, pode segurar motel/sexo explícito:
-    if not ja_foi:
-        if _detecta_coadjuvante_irregular(resposta):
-            precisa_retry = True
-        if _contem_convite_motel_ou_sexual(resposta) and _conta_turnos_usuario(usuario) < 8:
-            precisa_retry = True
-
-    if precisa_retry:
-        msgs2 = [messages[0], _reforco_system()] + messages[1:]
-        payload["messages"] = _normalize_messages(msgs2)
-        r3 = requests.post(url, headers=headers, json=payload, timeout=120)
-        if r3.ok:
-            resposta = r3.json()["choices"][0]["message"]["content"]
-            # Saneia locais novamente
-            try:
-                resposta = _sanitize_locais_na_saida(usuario, resposta)
-            except Exception:
-                pass
-            # Reaplica fix sensorial
-            try:
-                resposta = _fix_sensory_and_traits(resposta)
-            except Exception:
-                pass
-            # Reaplica convites/falas (suaves)
-            try:
-                resposta = _garante_decisao_convite(prompt_usuario, resposta)
-                resposta = _remove_falas_do_usuario_inventadas(resposta)
-            except Exception:
-                pass
-            # Renova lock se necessário
-            try:
-                if _detecta_contexto_sexual(resposta):
-                    parceiro_lock = cena_parc or parceiro_fixo or "Janio"
-                    _set_cena_parceiro(usuario, parceiro_lock, ttl_min=120)
-            except Exception:
-                pass
-
-    return resposta
-
-        # Retry: corrige persona/consistência SEM podar NSFW se já houve 'primeira_vez'
-    precisa_retry = _violou_mary(resposta, usuario)
-    
-    # 🚩 Novo: se negar ou “esquecer” o parceiro salvo, força retry
-    if _nega_parceiro(resposta, usuario):
-        precisa_retry = True
-
-
-# --- helper: normalize mensagens para evitar 400/alternância inválida ---
 def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """
-    - Mantém systems no topo.
-    - Remove assistants iniciais até aparecer o primeiro user (HISTORY_BOOT pode começar com assistant).
-    - Colapsa roles iguais consecutivas (mantém a última).
-    - Garante que haja ao menos um 'user'.
-    """
     if not msgs:
         return [{"role": "user", "content": "Oi."}]
-
     systems = [m for m in msgs if m.get("role") == "system" and (m.get("content") or "").strip()]
     rest = [m for m in msgs if m.get("role") != "system" and (m.get("content") or "").strip()]
-
     out: List[Dict[str, str]] = []
     viu_user = False
     for m in rest:
@@ -742,40 +506,206 @@ def _normalize_messages(msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
         if m["role"] == "user":
             viu_user = True
         out.append(m)
-
     col: List[Dict[str, str]] = []
     for m in out:
         if col and col[-1]["role"] == m["role"] and m["role"] in ("user", "assistant"):
             col[-1] = m
         else:
             col.append(m)
-
     if not any(m["role"] == "user" for m in col):
         col.append({"role": "user", "content": "Oi."})
-
     return systems + col
 
-# ========== Utilidades ==========
+# -----------------------------------------------------------------------------
+# HTTP helpers: sessão, retries exponenciais
+# -----------------------------------------------------------------------------
+
+_session = requests.Session()
+_session.headers.update({
+    "Content-Type": "application/json",
+    "HTTP-Referer": APP_PUBLIC_URL,
+    "X-Title": f"{APP_NAME} | Mary",
+})
+
+
+def _post_openrouter(payload: Dict[str, Any], timeout: int = 120, max_retries: int = 2) -> Dict[str, Any]:
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENROUTER_TOKEN}"}
+    last_err: Optional[str] = None
+    for i in range(max_retries + 1):
+        try:
+            r = _session.post(url, headers=headers, data=json.dumps(payload), timeout=timeout)
+            if r.ok:
+                return r.json()
+            try:
+                last_err = json.dumps(r.json())
+            except Exception:
+                last_err = r.text
+        except Exception as e:
+            last_err = str(e)
+        # backoff simples
+        time.sleep(0.75 * (2 ** i))
+    raise requests.HTTPError(f"OpenRouter falhou após retries: {last_err}")
+
+# -----------------------------------------------------------------------------
+# Geração de resposta — com NSFW gate opcional
+# -----------------------------------------------------------------------------
+
+def gerar_resposta_openrouter(
+    prompt_usuario: str,
+    usuario: str,
+    model: str = "deepseek/deepseek-chat-v3-0324",
+    limite_tokens_hist: int = 120_000,
+    nsfw: Optional[bool] = None,  # None = auto (baseado em 'primeira_vez'); True/False força modo
+) -> str:
+    # Modelo seguro (evita vision/vl)
+    low = (model or "").lower()
+    if "vision" in low or "-vl" in low:
+        model = "deepseek/deepseek-chat-v3-0324"
+
+    # Histórico + memória
+    hist = montar_historico_openrouter(usuario, limite_tokens=limite_tokens_hist)
+    memoria_txt = construir_contexto_memoria(usuario)
+    memoria_msg = ([{"role": "system", "content": "MEMÓRIA CANÔNICA:\n" + memoria_txt}] if memoria_txt.strip() else [])
+
+    # Fase e relacionamento
+    fase_msg = _msg_fase_inicial(usuario)
+    partner_msg = _partner_system_msg(usuario)
+
+    # Gate NSFW
+    if nsfw is None:
+        nsfw_on = _tem_primeira_vez(usuario)
+    else:
+        nsfw_on = bool(nsfw)
+    nsfw_msgs = [_nsfw_boost_system()] if nsfw_on else []
+
+    # Cena/continuidade de parceiro
+    cena_parc = _get_cena_parceiro(usuario)
+    fatos = get_fatos(usuario)
+    parceiro_fixo = (fatos.get("parceiro_atual") or "Janio").strip()
+
+    cena_msgs: List[Dict[str, str]] = []
+    if cena_parc:
+        cena_msgs.append({
+            "role": "system",
+            "content": (
+                f"CENA ÍNTIMA EM ANDAMENTO COM {cena_parc}. Mantenha continuidade; não introduza terceiros."
+            ),
+        })
+    elif parceiro_fixo:
+        cena_msgs.append({
+            "role": "system",
+            "content": (
+                f"Mary tem relacionamento fixo com {parceiro_fixo}. Não agir como solteira nem aceitar convites íntimos de terceiros."
+            ),
+        })
+
+    # Monta mensagens
+    messages: List[Dict[str, str]] = (
+        [
+            {"role": "system", "content": PERSONA_MARY},
+            partner_msg,
+            {"role": "system", "content": (
+                "Estilo: 3–6 parágrafos; 2–4 frases; um traço sensorial por parágrafo; "
+                "romântico e direto; sem metáforas acadêmicas. Respeite 'primeira_vez' e 'virgem'."
+            )},
+        ]
+        + nsfw_msgs
+        + ([fase_msg] if fase_msg else [])
+        + cena_msgs
+        + memoria_msg
+        + hist
+        + [{"role": "user", "content": prompt_usuario}]
+    )
+
+    payload = {
+        "model": model,
+        "messages": _normalize_messages(messages),
+        "max_tokens": 2048,
+        "temperature": 0.6,
+        "top_p": 0.9,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.2,
+    }
+
+    # Chamada principal com retry interno
+    try:
+        data = _post_openrouter(payload, timeout=120, max_retries=2)
+        resposta = data["choices"][0]["message"]["content"]
+    except Exception:
+        # Fallback de modelo (curto)
+        fallback = "mistralai/mixtral-8x7b-instruct-v0.1" if "deepseek" in low else "deepseek/deepseek-chat-v3-0324"
+        payload["model"] = fallback
+        data = _post_openrouter(payload, timeout=120, max_retries=1)
+        resposta = data["choices"][0]["message"]["content"]
+
+    # Pós-processamentos (tolerantes a erro)
+    try:
+        resposta = _sanitize_locais_na_saida(usuario, resposta)
+    except Exception:
+        pass
+    try:
+        resposta = _fix_sensory_and_traits(resposta)
+    except Exception:
+        pass
+
+    # Locks & coerência
+    precisa_retry = _violou_mary(resposta, usuario)
+    if _quebra_cena_parceiro(resposta, cena_parc or parceiro_fixo):
+        precisa_retry = True
+
+    # Se ainda não houve 'primeira_vez', pode segurar motel/sexo explícito no comecinho
+    if not _tem_primeira_vez(usuario):
+        if _conta_turnos_usuario(usuario) < 8 and re.search(r"\b(motel|penetra|transar|oral|gozar)\b", resposta, re.IGNORECASE):
+            precisa_retry = True
+
+    if precisa_retry:
+        msgs2 = [messages[0], _reforco_system()] + messages[1:]
+        payload["messages"] = _normalize_messages(msgs2)
+        try:
+            data2 = _post_openrouter(payload, timeout=120, max_retries=1)
+            resposta = data2["choices"][0]["message"]["content"]
+        except Exception:
+            pass
+        else:
+            try:
+                resposta = _sanitize_locais_na_saida(usuario, resposta)
+            except Exception:
+                pass
+            try:
+                resposta = _fix_sensory_and_traits(resposta)
+            except Exception:
+                pass
+
+    # Atualiza lock de cena se resposta é sexual
+    try:
+        if _detecta_contexto_sexual(resposta):
+            _set_cena_parceiro(usuario, cena_parc or parceiro_fixo or "Janio", ttl_min=120)
+    except Exception:
+        pass
+
+    return resposta
+
+# -----------------------------------------------------------------------------
+# Limpeza / Utilidades de manutenção
+# -----------------------------------------------------------------------------
+
 def limpar_memoria_usuario(usuario: str):
-    """Apaga apenas o histórico de chat (interações)."""
     colecao.delete_many({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
 
+
 def limpar_memoria_canonica(usuario: str):
-    """Apaga apenas as memórias canônicas (fatos, eventos, resumo)."""
     state.delete_many({"usuario": usuario})
     eventos.delete_many({"usuario": usuario})
     perfil.delete_many({"usuario": usuario})
 
+
 def apagar_tudo_usuario(usuario: str):
-    """Apaga chat + memórias canônicas."""
     limpar_memoria_usuario(usuario)
     limpar_memoria_canonica(usuario)
 
+
 def apagar_ultima_interacao_usuario(usuario: str):
-    """Remove as duas últimas entradas (user + assistant), se existirem."""
-    docs = list(
-        colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}})
-        .sort([('_id', -1)]).limit(2)
-    )
-    for doc in docs:
-        colecao.delete_one({'_id': doc['_id']})
+    docs = list(colecao.find({"usuario": {"$regex": f"^{re.escape(usuario)}$", "$options": "i"}}).sort([("_id", -1)]).limit(2))
+    for d in docs:
+        colecao.delete_one({"_id": d["_id"]})
