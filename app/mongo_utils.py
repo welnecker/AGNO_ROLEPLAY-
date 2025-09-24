@@ -347,18 +347,15 @@ def _reforco_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
-            "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:
-"
-            "- Cabelo: 'Meus cabelos são negros e volumosos.'
-"
-            "- Curso/Faculdade: 'Eu estudo Design de moda na UFES.'
-"
-            "- Mãe: 'O nome da minha mãe é Joselina.'
-"
-            "- Respeite locais/eventos canônicos. Praia de Camburi é praia pública; não é clube/balada. Use Clube Náutico para balada.
-"
+            "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:\n"
+            "- Cabelo: 'Meus cabelos são negros e volumosos.'\n"
+            "- Curso/Faculdade: 'Eu estudo Design de moda na UFES.'\n"
+            "- Mãe: 'O nome da minha mãe é Joselina.'\n"
+            "- Respeite locais/eventos canônicos. Praia de Camburi é praia pública; "
+            "não é clube/balada. Use Clube Náutico para balada.\n"
         ),
     }
+
 
 # Parceria/cena ativa
 
