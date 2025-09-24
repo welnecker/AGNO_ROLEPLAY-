@@ -30,6 +30,50 @@ def _event_id(usuario: str, tipo: str, descricao: str) -> str:
     raw = f"{usuario}|{tipo}|{descricao}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
 
+# --- Inferidor e normalizador de LOCAL da cena ---
+_CANON_LOCAIS_UI = {
+    "Praia de Camburi": "praia de camburi",
+    "Academia Fisium Body": "academia fisium body",
+    "Clube Náutico": "clube náutico",
+    "Cafeteria Oregon": "cafeteria oregon",
+    "Restaurante Partido Alto": "restaurante partido alto",
+    "Enseada do Suá": "enseada do suá",
+    "Motel Status": "motel status",
+}
+
+def _inferir_local_do_prompt(prompt: str) -> str | None:
+    t = (prompt or "").lower()
+    # praia
+    if re.search(r"\b(praia|areia|onda|biqu[ií]ni|sunga|quiosque|coco|guarda-?sol|orla|mar)\b", t):
+        return "praia de camburi"
+    # academia
+    if re.search(r"\b(academia|fisium|halter|barra|anilha|agachamento|repeti[cç][aã]o|s[eé]rie|aparelho|esteira|gl[uú]teo)\b", t):
+        return "academia fisium body"
+    # balada
+    if re.search(r"\b(clube\s*náutico|náutico|balada|pista|dj)\b", t):
+        return "clube náutico"
+    # cafeteria
+    if re.search(r"\b(cafeteria|café\s*oregon|oregon|capuccino)\b", t):
+        return "cafeteria oregon"
+    # restaurante
+    if re.search(r"\b(partido\s*alto|restaurante|almo[cç]o|gar[cç]om)\b", t):
+        return "restaurante partido alto"
+    # enseada
+    if re.search(r"\b(enseada\s*do\s*su[aá]|enseada)\b", t):
+        return "enseada do suá"
+    # motel
+    if re.search(r"\b(motel\s*status|motel|su[ií]te|neon)\b", t):
+        return "motel status"
+    return None
+
+def _fixar_local(usuario: str, local_canon: str):
+    if mu is None or not usuario or not local_canon:
+        return
+    try:
+        mu.set_fato(usuario, "local_cena_atual", local_canon, meta={"fonte": "ui/infer", "ts": _now_iso()})
+    except Exception:
+        pass
+
 
 def ensure_janio_context(
     usuario: str,
@@ -218,6 +262,40 @@ else:
 # ===== Status íntimo / NSFW toggle =====
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔓 Status íntimo")
+
+# ===== Local da cena =====
+st.sidebar.markdown("---")
+st.sidebar.subheader("📍 Local da cena")
+
+st.session_state.setdefault("local_auto", True)
+st.session_state.setdefault("local_manual", "Praia de Camburi")
+
+local_atual_badge = ""
+if usuario_atual and mu is not None:
+    try:
+        local_atual_badge = mu.get_fato(usuario_atual, "local_cena_atual", "") or ""
+    except Exception:
+        local_atual_badge = ""
+
+if usuario_atual:
+    st.sidebar.caption(f"Atual: **{local_atual_badge or '— (auto)'}**")
+
+st.session_state.local_auto = st.sidebar.checkbox("Inferir automaticamente pelo chat", value=st.session_state.local_auto)
+
+st.session_state.local_manual = st.sidebar.selectbox(
+    "Definir manualmente (opcional)",
+    list(_CANON_LOCAIS_UI.keys()),
+    index=list(_CANON_LOCAIS_UI.keys()).index(st.session_state.local_manual)
+)
+
+colL1, colL2 = st.sidebar.columns(2)
+if colL1.button("📌 Fixar local", disabled=(not usuario_atual) or (mu is None)):
+    _fixar_local(usuario_atual, _CANON_LOCAIS_UI[st.session_state.local_manual])
+    st.sidebar.success(f"Local fixado: {_CANON_LOCAIS_UI[st.session_state.local_manual]}")
+if colL2.button("🧽 Limpar local", disabled=(not usuario_atual) or (mu is None)):
+    _fixar_local(usuario_atual, "")
+    st.sidebar.info("Local limpo (modo auto).")
+
 
 # Estado volátil para anti-rerun
 st.session_state.setdefault("virgindade_estado_inicial", None)
@@ -569,39 +647,56 @@ with chat:
 
 # ===== Input fixo no rodapé =====
 
-def aplicar_restricoes(prompt_usuario: str, liberar_nsfw: bool) -> str:
-    """Prefixa instruções conforme o gate NSFW, sem erros de string."""
+def aplicar_restricoes(prompt_usuario: str, liberar_nsfw: bool, local_atual: str = "") -> str:
+    """Prefixa instruções conforme o gate NSFW e injeta o LOCAL_ATUAL."""
     if liberar_nsfw:
         prefix = (
             "[MODO_NSFW_LIBERADO]\n"
-            "Siga um tom sensual adulto quando apropriado, mas SEM conteúdo ilegal, sem menores, sem incesto, sem violência sexual, sem bestialidade.\n"
-            "Respeite consentimento, segurança e bom gosto. Evite descrições gráficas excessivas; foque em química, emoção e diálogo natural.\n"
+            "Tom sensual adulto quando apropriado; SEM conteúdo ilegal, menores, incesto, violência sexual ou bestialidade.\n"
+            "Consentimento e bom gosto; evite gore e hiper-detalhe gráfico.\n"
         )
     else:
         prefix = (
             "[MODO_SEGURO]\n"
-            "Responda em tom romântico/afetivo leve, SEM cenas sexuais explícitas.\n"
-            "Foque em flerte sutil, treino, cotidiano, emoções e diálogo respeitoso.\n"
+            "Tom romântico/afetivo leve, SEM cenas sexuais explícitas; foque em flerte, cotidiano e diálogo.\n"
         )
+    if local_atual:
+        prefix += f"LOCAL_ATUAL: {local_atual}\n"
+        prefix += "Mantenha coerência estrita com o LOCAL_ATUAL (não misture praia com academia, etc.).\n"
     return prefix + "\n\n" + (prompt_usuario or "")
+
 
 if usuario_atual:
     if prompt := st.chat_input("Envie sua mensagem para Mary"):
-        with st.chat_message("user"):
-            st.markdown(prompt)
-        try:
-            if mu is not None:
-                liberar = nsfw_liberado(usuario_atual)
-                prompt_final = aplicar_restricoes(prompt, liberar)
-                resposta = mu.gerar_resposta_openrouter(
-                    prompt_final, usuario_atual, model=st.session_state.modelo_escolhido
-                )
-            else:
-                raise RuntimeError("mongo_utils indisponível — não foi possível gerar resposta.")
-        except Exception as e:
-            st.error(f"Falha ao gerar resposta: {e}")
-            resposta = "Desculpa, tive um problema para responder agora. Pode tentar de novo?"
-        try:
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    try:
+        if mu is not None:
+            # 1) Auto-inferir LOCAL (se ligado)
+            if st.session_state.get("local_auto", True):
+                loc_inf = _inferir_local_do_prompt(prompt)
+                if loc_inf:
+                    _fixar_local(usuario_atual, loc_inf)
+
+            # 2) Ler local atual para injetar no prompt
+            try:
+                _local_now = mu.get_fato(usuario_atual, "local_cena_atual", "") or ""
+            except Exception:
+                _local_now = ""
+
+            # 3) Montar prompt final com restrições + LOCAL_ATUAL
+            liberar = nsfw_liberado(usuario_atual)
+            prompt_final = aplicar_restricoes(prompt, liberar, _local_now)
+
+            # 4) Gerar resposta
+            resposta = mu.gerar_resposta_openrouter(
+                prompt_final, usuario_atual, model=st.session_state.modelo_escolhido
+            )
+        else:
+            raise RuntimeError("mongo_utils indisponível — não foi possível gerar resposta.")
+    except Exception as e:
+        st.error(f"Falha ao gerar resposta: {e}")
+        resposta = "Desculpa, tive um problema para responder agora. Pode tentar de novo?"        try:
             if mu is not None:
                 mu.salvar_interacao(usuario_atual, prompt, resposta)
         except Exception as e:
