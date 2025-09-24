@@ -2,8 +2,6 @@
 import re
 import streamlit as st
 from datetime import datetime
-import mongo_utils
-
 
 # ==== Importação eficiente e diagnóstico de mongo_utils ====
 try:
