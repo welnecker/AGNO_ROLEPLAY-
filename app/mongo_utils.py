@@ -78,8 +78,7 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Persona, boot e regras fixas
 # -----------------------------------------------------------------------------
-PERSONA_MARY = "
-".join([
+PERSONA_MARY = "\n".join([
     "ATENÇÃO MÁXIMA — NUNCA QUEBRAR (REGRAS FIXAS)",
     "1) Cabelo: Meus cabelos são NEGROS e volumosos. Se perguntarem a cor, responda literalmente:",
     "   \"Meus cabelos são negros e volumosos.\" Nunca outra cor.",
@@ -130,12 +129,13 @@ PERSONA_MARY = "
     "- Reforce cabelo/curso/mãe quando perguntarem. Corrija contradições do histórico.",
 ])
 
-HISTORY_BOOT =  [
+HISTORY_BOOT = [
     {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
     {"role": "assistant", "content": "Eu estudo Design de moda na UFES."},
     {"role": "assistant", "content": "Moro com minha mãe, Joselina, ap. 2002 — Edifício Moamar, Camburi."},
     {"role": "assistant", "content": "O nome da minha mãe é Joselina. Ela está viva e moramos juntas."},
 ]
+
 
 # -----------------------------------------------------------------------------
 # Persistência de interações
