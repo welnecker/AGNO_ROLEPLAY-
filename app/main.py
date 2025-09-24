@@ -66,13 +66,18 @@ def _inferir_local_do_prompt(prompt: str) -> str | None:
         return "motel status"
     return None
 
-def _fixar_local(usuario: str, local_canon: str):
-    if mu is None or not usuario or not local_canon:
+def _fixar_local(usuario: str, local_canon: str | None):
+    if mu is None or not usuario:
         return
     try:
-        mu.set_fato(usuario, "local_cena_atual", local_canon, meta={"fonte": "ui/infer", "ts": _now_iso()})
+        if local_canon:
+            mu.set_fato(usuario, "local_cena_atual", local_canon, meta={"fonte": "ui/infer", "ts": _now_iso()})
+        else:
+            # limpar (modo auto)
+            mu.set_fato(usuario, "local_cena_atual", "", meta={"fonte": "ui/infer", "ts": _now_iso(), "clear": True})
     except Exception:
         pass
+
 
 
 def ensure_janio_context(
@@ -667,42 +672,48 @@ def aplicar_restricoes(prompt_usuario: str, liberar_nsfw: bool, local_atual: str
 
 
 if usuario_atual:
-    if prompt := st.chat_input("Envie sua mensagem para Mary"):
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    try:
-        if mu is not None:
-            # 1) Auto-inferir LOCAL (se ligado)
-            if st.session_state.get("local_auto", True):
-                loc_inf = _inferir_local_do_prompt(prompt)
-                if loc_inf:
-                    _fixar_local(usuario_atual, loc_inf)
+    prompt = st.chat_input("Envie sua mensagem para Mary")
+    if prompt:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        try:
+            if mu is not None:
+                # 1) Auto-inferir LOCAL (se ligado)
+                if st.session_state.get("local_auto", True):
+                    loc_inf = _inferir_local_do_prompt(prompt)
+                    if loc_inf:
+                        _fixar_local(usuario_atual, loc_inf)
 
-            # 2) Ler local atual para injetar no prompt
-            try:
-                _local_now = mu.get_fato(usuario_atual, "local_cena_atual", "") or ""
-            except Exception:
-                _local_now = ""
+                # 2) Ler local atual para injetar no prompt
+                try:
+                    _local_now = mu.get_fato(usuario_atual, "local_cena_atual", "") or ""
+                except Exception:
+                    _local_now = ""
 
-            # 3) Montar prompt final com restrições + LOCAL_ATUAL
-            liberar = nsfw_liberado(usuario_atual)
-            prompt_final = aplicar_restricoes(prompt, liberar, _local_now)
+                # 3) Montar prompt final com restrições + LOCAL_ATUAL
+                liberar = nsfw_liberado(usuario_atual)
+                prompt_final = aplicar_restricoes(prompt, liberar, _local_now)
 
-            # 4) Gerar resposta
-            resposta = mu.gerar_resposta_openrouter(
-                prompt_final, usuario_atual, model=st.session_state.modelo_escolhido
-            )
-        else:
-            raise RuntimeError("mongo_utils indisponível — não foi possível gerar resposta.")
-    except Exception as e:
-        st.error(f"Falha ao gerar resposta: {e}")
-        resposta = "Desculpa, tive um problema para responder agora. Pode tentar de novo?"        try:
+                # 4) Gerar resposta
+                resposta = mu.gerar_resposta_openrouter(
+                    prompt_final, usuario_atual, model=st.session_state.modelo_escolhido
+                )
+            else:
+                raise RuntimeError("mongo_utils indisponível — não foi possível gerar resposta.")
+        except Exception as e:
+            st.error(f"Falha ao gerar resposta: {e}")
+            resposta = "Desculpa, tive um problema para responder agora. Pode tentar de novo?"
+
+        # 5) Persistir e renderizar
+        try:
             if mu is not None:
                 mu.salvar_interacao(usuario_atual, prompt, resposta)
         except Exception as e:
             st.warning(f"Não consegui salvar a interação: {e}")
+
         if mu is not None:
             st.session_state.mary_log = mu.montar_historico_openrouter(usuario_atual)
+
         with st.chat_message("assistant", avatar="💚"):
             st.markdown(resposta)
 else:
