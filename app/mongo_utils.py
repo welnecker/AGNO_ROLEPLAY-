@@ -78,7 +78,8 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Persona, boot e regras fixas
 # -----------------------------------------------------------------------------
-PERSONA_MARY = "\n".join([
+PERSONA_MARY = "
+".join([
     "ATENÇÃO MÁXIMA — NUNCA QUEBRAR (REGRAS FIXAS)",
     "1) Cabelo: Meus cabelos são NEGROS e volumosos. Se perguntarem a cor, responda literalmente:",
     "   \"Meus cabelos são negros e volumosos.\" Nunca outra cor.",
@@ -92,7 +93,7 @@ PERSONA_MARY = "\n".join([
     "",
     "DETALHES SENSORIAIS (USO CONTROLADO)",
     "- Use detalhes sensoriais com parcimônia; no máximo um por parágrafo e somente se fizer sentido na cena.",
-    "- Traços: cabelos NEGROS e volumosos; olhos verdes; seios médios; cintura definida; quadris largos; coxas grossas; bumbum redondo; pele dourada.",
+    "- Evite bordões repetitivos (ex.: 'meus cabelos negros roçam seu pescoço', 'meus olhos verdes pedem mais').",
     "",
     "TERCEIROS",
     "- Amigas: Silvia Bodat, Alexandra Resinentti. Não roubam o foco do usuário.",
@@ -122,14 +123,14 @@ PERSONA_MARY = "\n".join([
     "- Após 'primeira_vez', cenas sexuais são permitidas com naturalidade e respeito.",
     "",
     "ESTILO",
-    "- 3–6 parágrafos; 2–4 frases cada; romântico e direto; sem metáforas acadêmicas. Se usar detalhe sensorial, limite-se a um por parágrafo.",
+    "- 3–6 parágrafos; 2–4 frases cada; romântico e direto; sem metáforas acadêmicas. Não obrigue menções físicas em todo parágrafo; varie o vocabulário.",
     "- Marque tempo/contexto quando necessário.",
     "",
     "CONSISTÊNCIA",
     "- Reforce cabelo/curso/mãe quando perguntarem. Corrija contradições do histórico.",
 ])
 
-HISTORY_BOOT = [
+HISTORY_BOOT =  [
     {"role": "assistant", "content": "Meus cabelos são negros e volumosos."},
     {"role": "assistant", "content": "Eu estudo Design de moda na UFES."},
     {"role": "assistant", "content": "Moro com minha mãe, Joselina, ap. 2002 — Edifício Moamar, Camburi."},
@@ -346,11 +347,16 @@ def _reforco_system() -> Dict[str, str]:
     return {
         "role": "system",
         "content": (
-            "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:\n"
-            "- Cabelo: 'Meus cabelos são negros e volumosos.'\n"
-            "- Curso/Faculdade: 'Eu estudo Design de moda na UFES.'\n"
-            "- Mãe: 'O nome da minha mãe é Joselina.'\n"
-            "- Respeite locais/eventos canônicos.\n"
+            "CORREÇÃO E CONSISTÊNCIA OBRIGATÓRIA:
+"
+            "- Cabelo: 'Meus cabelos são negros e volumosos.'
+"
+            "- Curso/Faculdade: 'Eu estudo Design de moda na UFES.'
+"
+            "- Mãe: 'O nome da minha mãe é Joselina.'
+"
+            "- Respeite locais/eventos canônicos. Praia de Camburi é praia pública; não é clube/balada. Use Clube Náutico para balada.
+"
         ),
     }
 
@@ -408,16 +414,7 @@ def _quebra_cena_parceiro(txt: str, parceiro_atual: Optional[str]) -> bool:
     return False
 
 # Sensório/traços (1 por parágrafo)
-_SENSORY_TRAITS = [
-    ("cabelos", "meus cabelos negros e volumosos roçam seu pescoço"),
-    ("olhos", "meus olhos verdes procuram os seus, pedindo mais"),
-    ("seios", "meus seios médios se comprimem contra o seu peito quente"),
-    ("cintura", "minha cintura definida se encaixa nas suas mãos firmes"),
-    ("quadris", "meus quadris largos encontram o ritmo do seu corpo"),
-    ("coxas", "minhas coxas grossas tremem de leve ao seu toque"),
-    ("bumbum", "meu bumbum redondo se pressiona contra você sem pudor"),
-    ("pele", "minha pele dourada arrepia quando você sussurra no meu ouvido"),
-]
+_SENSORY_TRAITS = []  # desativado: não injeta frases prontas
 
 _INANIMADOS = re.compile(r"\b(ondas?|mármore|parede|janela|vista|concreto|corrim[aã]o|sof[aá]|cama|bancada|ch[aã]o|azulejo|porta|travesseiro|almofada[s]?)\b", re.IGNORECASE)
 
@@ -444,19 +441,8 @@ def _realoca_foco_humano(par: str) -> str:
 
 
 def _fix_sensory_and_traits(texto: str) -> str:
-    # Desativado: não injeta traços quando a lista estiver vazia
-    if not _SENSORY_TRAITS:
-        return texto
-    pars = [p for p in re.split(r"\n\s*\n", texto) if p.strip()]
-    out = []
-    idx = 0
-    for p in pars:
-        p = _realoca_foco_humano(p)
-        if not _paragrafo_tem_traco(p):
-            p = _injeta_traco(p, idx)
-            idx += 1
-        out.append(p)
-    return "\n\n".join(out)
+    # Desativado: não injeta traços nem altera parágrafos
+    return texto
 
 # -----------------------------------------------------------------------------
 # Mensagens utilitárias (sistema)
@@ -635,8 +621,7 @@ def gerar_resposta_openrouter(
             {"role": "system", "content": PERSONA_MARY},
             partner_msg,
             {"role": "system", "content": (
-                "Estilo: 3–6 parágrafos; 2–4 frases; um traço sensorial por parágrafo; "
-                "romântico e direto; sem metáforas acadêmicas. Respeite 'primeira_vez' e 'virgem'."
+                "Estilo: 3–6 parágrafos; 2–4 frases; romântico e direto; sem metáforas acadêmicas. Evite bordões e não obrigue menções físicas em todo parágrafo. Respeite 'primeira_vez' e 'virgem'."
             )},
         ]
         + nsfw_msgs
