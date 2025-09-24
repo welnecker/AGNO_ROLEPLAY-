@@ -47,7 +47,7 @@ inicializar_indices()
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 # === Persona e Âncoras constantes ===
-from .persona_anchors import PERSONA_MARY, HISTORY_BOOT
+from persona_anchors import PERSONA_MARY, HISTORY_BOOT
 # (OBS: É recomendável guardar constantes extensas fora do arquivo principal, ex. persona_anchors.py)
 
 # === Centralização de regex proibidos ===
