@@ -496,6 +496,29 @@ def _fix_sensory_and_traits(texto: str) -> str:
     # Desativado: não injeta traços nem altera parágrafos
     return texto
 
+def _formatar_roleplay_profissional(texto: str, max_frases_por_par: int = 3) -> str:
+    """Se vier um 'blocão', corta em parágrafos de 1–3 frases separados por linha em branco."""
+    if not texto:
+        return texto
+    if "\n\n" in texto.strip():
+        return texto.strip()
+
+    # divide por fim de frase (., !, ?, …) preservando pontuação
+    partes = re.split(r'(?<=[\.\!\?\u2026])\s+', texto.strip())
+    partes = [p.strip() for p in partes if p.strip()]
+
+    paragrafos, buffer = [], []
+    for s in partes:
+        buffer.append(s)
+        if len(buffer) >= max_frases_por_par:
+            paragrafos.append(" ".join(buffer))
+            buffer = []
+    if buffer:
+        paragrafos.append(" ".join(buffer))
+
+    return "\n\n".join(paragrafos)
+
+
 # -----------------------------------------------------------------------------
 # Mensagens utilitárias (sistema)
 # -----------------------------------------------------------------------------
@@ -667,17 +690,21 @@ def gerar_resposta_openrouter(
             ),
         })
 
-    # Monta mensagens
+       # Monta mensagens
     messages: List[Dict[str, str]] = (
         [
             {"role": "system", "content": PERSONA_MARY},
             partner_msg,
-           {"role": "system", "content": (
-            "ESTILO: adulto e direto. Frases curtas (5–14 palavras). Sem parênteses de metacena. "
-            "Nada de diminutivos (risadinha, beicinho). Verbo forte, menos floreio. "
-            "Desejo explícito com classe. Mantenha coerência estrita com o local atual."
-        )},
-
+            {"role": "system", "content": (
+                "ESTILO: adulto e direto. Frases curtas (5–14 palavras). Sem parênteses de metacena. "
+                "Nada de diminutivos (risadinha, beicinho). Verbo forte, menos floreio. "
+                "Desejo explícito com classe. Mantenha coerência estrita com o local atual."
+            )},
+            {"role": "system", "content": (
+                "FORMATAÇÃO: escreva em 4–6 parágrafos separados por LINHA EM BRANCO; "
+                "cada parágrafo com 1–3 frases. Use falas entre aspas. "
+                "Nunca entregue tudo em um único parágrafo."
+            )},
         ]
         + nsfw_msgs
         + ([fase_msg] if fase_msg else [])
@@ -686,6 +713,7 @@ def gerar_resposta_openrouter(
         + hist
         + [{"role": "user", "content": prompt_usuario}]
     )
+
 
     payload = {
         "model": model,
@@ -762,7 +790,15 @@ def gerar_resposta_openrouter(
         if _detecta_contexto_sexual(resposta):
             _set_cena_parceiro(usuario, cena_parc or parceiro_fixo or "Janio", ttl_min=120)
     except Exception:
+      
         pass
+
+     # === NOVO: formatar em parágrafos curtos para roleplay profissional ===
+    try:
+        resposta = _formatar_roleplay_profissional(resposta, max_frases_por_par=3)
+    except Exception:
+        pass
+    
 
     return resposta
 
